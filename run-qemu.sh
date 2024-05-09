@@ -56,4 +56,5 @@ qemu-system-x86_64 \
 	-append "root=/dev/sda" \
 	-drive "file=$qcow2_img,format=qcow2" \
 	-fsdev local,id=fsdev0,path="$shared_dir",security_model=mapped \
-	-device virtio-9p-pci,id=fs0,fsdev=fsdev0,mount_tag=hostshare
+	-device virtio-9p-pci,id=fs0,fsdev=fsdev0,mount_tag=hostshare \
+	-display sdl,gl=on
