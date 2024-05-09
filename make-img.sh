@@ -1,8 +1,41 @@
 #!/bin/sh
 set -eu
 
-tgz_url=https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-minirootfs-3.19.1-x86_64.tar.gz
-tgz_sha="185123ceb6e7d08f2449fff5543db206ffb79decd814608d399ad447e08fa29e"
+usage() {
+	cat <<EOF
+Usage: make-img.sh [-h] [-v]
+
+Create Void Linux rootfs images for send and recv VMs.
+Fetches an Void Linux Linux tarball unless already present.
+Creates a new raw image and unpacks tarballs into it.
+Then creates two qcow2 images for send and recv VMs backed by the raw image.
+
+ANY EXISTING ROOTFS IMAGES WILL BE DESTROYED.
+
+Options:
+
+  -h  Print this message and exit
+  -v  set -x
+EOF
+}
+
+while getopts hv opt; do
+	case $opt in
+	h) usage; exit 0;;
+	v) set -x;;
+	*) usage >&2; exit 1;;
+	esac
+done
+
+shift $((OPTIND - 1))
+
+[ $# -eq 0 ] || {
+	usage
+	exit 1
+} >&2
+
+tgz_url=https://repo-default.voidlinux.org/live/current/void-x86_64-ROOTFS-20240314.tar.xz
+tgz_sha=FIXME
 
 tmpdir=$(mktemp -d)
 
@@ -20,14 +53,14 @@ trap cleanup EXIT INT QUIT TERM
 
 curl \
 	-sSfq \
-	-o alpine.tgz \
-	--etag-save alpine.tgz.etag \
-	--etag-compare alpine.tgz.etag \
+	-o rootfs.tar.xz \
+	--etag-save rootfs.tar.xz.etag \
+	--etag-compare rootfs.tar.xz.etag \
 	"$tgz_url"
 
 sudo mkfs.ext4 "$loopdev"
 sudo mount "$loopdev" "$tmpdir"
-sudo tar -xzvf alpine.tgz -C "$tmpdir" # TODO: Verify hash
+sudo tar -xJvf rootfs.tar.xz -C "$tmpdir" # TODO: Verify hash
 
 for img in send recv; do
 	qemu-img create -f qcow2 -b rootfs.img -F raw "$img.qcow2"
