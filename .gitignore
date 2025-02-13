@@ -1,20 +1,2 @@
 # Ignore development directory
 /dev/
-
-# Ignore old thesis
-/old-thesis/
-
-aux/
-*.pdf
-
-# In case you are not using latexmk with the output directory set:
-*.aux
-*.bcf
-*.lof
-*.log
-*.lot
-*.out
-*.run.xml
-*.toc
-*.xmpdata
-*.xmpi
