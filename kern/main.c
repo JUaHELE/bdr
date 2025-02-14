@@ -63,8 +63,6 @@ static int bdr_chardev_mmap(struct file *filp, struct vm_area_struct *vma)
 		return -EINVAL;
 	}
 
-	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
-
 	unsigned long rb_size = bdr_ring_buffer_get_byte_size(&bc->ring_buf);
 
 	unsigned long mapped_size = vma->vm_end - vma->vm_start;
@@ -141,7 +139,6 @@ static struct file_operations bdr_chardev_fops = {
 	.mmap = bdr_chardev_mmap,
 	.open = bdr_chardev_open,
 	.unlocked_ioctl = bdr_chardev_ioctl,
-	/* .read = bdr_chardev_read_wait, */
 };
 
 /*
@@ -150,10 +147,8 @@ static struct file_operations bdr_chardev_fops = {
 static int bdr_chardev_init(struct bdr_context *bc)
 {
 	int ret;
-	struct device *dev;
-	int minor;
 
-	minor = bdr_bitmap_allocate(&bdr_minor_bitmap);
+	int minor = bdr_bitmap_allocate(&bdr_minor_bitmap);
 	if (minor < 0) {
 		pr_err("No more minor numbers available for bdr devices\n");
 		return -ENOMEM;
@@ -161,7 +156,7 @@ static int bdr_chardev_init(struct bdr_context *bc)
 
 	bc->chardev_num = MKDEV(MAJOR(bdr_dev_major), minor);
 
-	dev = device_create(bdr_chardev_class, NULL, bc->chardev_num, NULL, bc->chardev_name);
+	struct device *dev = device_create(bdr_chardev_class, NULL, bc->chardev_num, NULL, bc->chardev_name);
 	if (IS_ERR(dev)) {
 		ret = PTR_ERR(dev);
 		pr_err("Failed to create character device");
@@ -191,27 +186,27 @@ err_device:
  */
 static int bdr_target_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
-	struct bdr_context *bc;
 	int ret;
-	unsigned int max_writes;
-
+	
 	if (argc != 3) {
 		ti->error = "Invalid argument count, provide device path and char dev name";
 		return -EINVAL;
 	}
 
-	bc = kzalloc(sizeof(struct bdr_context), GFP_KERNEL);
+	struct bdr_context *bc = kzalloc(sizeof(struct bdr_context), GFP_KERNEL);
 	if (bc == NULL) {
 		ti->error = "Cannot allocate bdr context";
 		return -ENOMEM;
 	}
 
+	/* argv[0] is backing device */
 	ret = dm_get_device(ti, argv[0], dm_table_get_mode(ti->table), &bc->dev);
 	if (ret) {
 		ti->error = "Device lookup failed";
 		goto err_get_dev;
 	}
 
+	/* argv[1] is name of the character device */
 	bc->chardev_name = kstrdup(argv[1], GFP_KERNEL);
 	if (!bc->chardev_name) {
 		ti->error = "Failed to copy target name";
@@ -219,6 +214,7 @@ static int bdr_target_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto err_name;
 	}
 
+	unsigned int max_writes;
 	if (sscanf(argv[2], "%iu", &max_writes) != 1 || max_writes == 0) {
 		ti->error = "Invalid maximum of writes";
 		goto err_scanf_buffer;
@@ -279,6 +275,9 @@ struct target_type bdr_target_fops = {
 	/* TODO: status, suspend, resume, ... */
 };
 
+/*
+ * function invoked when the target is loaded
+ */
 static int __init bdr_init(void)
 {
 	int ret;

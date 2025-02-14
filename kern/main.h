@@ -5,7 +5,6 @@
 
 #define BDR_MAX_DEVICES 64
 
-
 /*
  * context for bdr
  */
