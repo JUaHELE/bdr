@@ -2,10 +2,10 @@
 # INIT ------
 set -eou pipefail
 
-source ./utils/utils.sh
+source ../utils/utils.sh
 
 TEST_NAME="\"Many targets loadable\""
-START_SUFFIX_PATH="test"
+START_SUFFIX_PATH="shell"
 HELP_MESSAGE="Usage: $(basename "$0") [OPTIONS] [WAIT_TIME]
 
 A test script for creating and managing multiple BDR targets.
@@ -51,7 +51,7 @@ test_init() {
     if check_correct_path "$START_SUFFIX_PATH"; then
         log_info "Starting test $TEST_NAME"
     else
-        error_exit "Executing tests in wrong directory($working_dir), please go to bdr/test"
+        error_exit "Executing tests in wrong directory($working_dir), please go to bdr/test/shell"
     fi
 }
 

@@ -178,6 +178,7 @@ err_add:
 err_device:
 	bdr_bitmap_free(&bdr_minor_bitmap, minor);
 
+
 	return ret;
 }
 
@@ -226,12 +227,16 @@ static int bdr_target_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto err_scanf_buffer;
 	}
 
-	ti->private = bc;
-
+	/* initilize character device associated with the target */
 	ret = bdr_chardev_init(bc);
 	if (ret) {
 		goto err_chardev;
 	}
+
+	ti->private = bc;
+
+	/* once the target loads it starts replicating immediately */
+	bc->status = ACTIVE;
 
 	return 0;
 

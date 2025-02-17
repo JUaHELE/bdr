@@ -23,6 +23,13 @@ struct bdr_context {
 
 	/* character device name */
 	char* chardev_name;
+
+	enum  {
+		ACTIVE,
+		OVERFLOWING,
+		STOPPED,
+	} status;
+
 };
 
 #endif

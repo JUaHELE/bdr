@@ -1,6 +1,6 @@
 #!/bin/bash
 
-declare -a LOOP_DEVICES
+declare -ga LOOP_DEVICES
 TMP_DIR=$(mktemp -d)
 
 # FUNCTIONS ------
@@ -18,7 +18,7 @@ create_loop_device() {
 	# $1 should hold a number to index in LOOP_DEVICES
 	
 	local number="$1"
-	local dev_backing_file="$TMP_DIR/loop$i.img"
+	local dev_backing_file="$TMP_DIR/loop$number.img"
 
 	# $2 is size of the loop device created
 	local dev_size_mb="$2"

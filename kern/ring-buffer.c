@@ -20,14 +20,6 @@
 #include "ring-buffer.h"
 
 /*
- * TODO: big potential performance improvements
- * per CPU ring buffer (don't know if that would work)
- * atomic operations instead of some spilocks
- * memory barriers
- * alignment and prefetch()
- */
-
-/*
  * initiates and allocates resources
  * size is a number which describes how many actual writes fit into the buffer
  */
@@ -108,6 +100,7 @@ void bdr_ring_buffer_update_unsafe(struct bdr_ring_buffer *rb)
 
 	buffer_info->length += 1;
 
+	/* in this function we also check whether the buffer overflown: */
 	unsigned long buffer_offset = buffer_info->offset + buffer_info->length;
 
 	/* need to modulo so it fits into the buffer */
