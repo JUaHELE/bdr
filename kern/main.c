@@ -32,6 +32,9 @@ static dev_t bdr_dev_major;
 /* track existing character devices minor numbers */
 static struct bdr_bitmap bdr_minor_bitmap;
 
+/* if no new writes are available */
+static DECLARE_WAIT_QUEUE_HEAD(bdr_wait_queue);
+
 static void bdr_target_dtr(struct dm_target *ti)
 {
 	struct bdr_context *bc = (struct bdr_context*)ti->private;
@@ -91,6 +94,7 @@ static int bdr_chardev_mmap(struct file *filp, struct vm_area_struct *vma)
 
 /*
  * open function for character device
+ * just saves private content of target to character device private field
  */
 static int bdr_chardev_open(struct inode *inode, struct file *filp)
 {
@@ -120,6 +124,12 @@ static long bdr_chardev_ioctl(struct file *filp, unsigned int cmd, unsigned long
 	case BDR_CMD_GET_TARGET_INFO:
 		struct bdr_target_info target_info = bdr_get_target_info(rb);
 		if (copy_to_user((void __user *)arg, &target_info, sizeof(target_info))) {
+			ret = -EFAULT;
+		}
+		break;
+	case BDR_CMD_GET_STATUS:
+		enum bdr_status status = bc->status;
+		if (copy_to_user((void __user *)arg, &status, sizeof(status))) {
 			ret = -EFAULT;
 		}
 		break;
@@ -254,9 +264,58 @@ err_get_dev:
 	return ret;
 }
 
+/*
+ * copies write info to buffer
+ */
+static void bdr_put_write_to_buffer(struct bdr_ring_buffer *rb, struct bio *bio, struct bio_vec *bvec, struct bvec_iter *iter) {
+
+	unsigned int seg_len = bvec->bv_len;
+	unsigned int seg_page_off = bvec->bv_offset;
+	struct page *seg_page = bvec->bv_page;
+	unsigned int seg_sec = iter->bi_sector;
+
+	while (seg_len > 0) {
+		unsigned int size_to_copy = min(seg_len, PAGE_SIZE - seg_page_off);
+		
+		int ret = bdr_ring_buffer_put(rb, seg_sec, size_to_copy, seg_page, seg_page_off, seg_len);
+		if(ret)
+			return;
+
+		seg_len -= size_to_copy;
+		seg_page_off = 0;
+		seg_sec += 1;
+	}
+}
+
+/*
+ * puts writes into the buffer
+ */
+static void bdr_submit_bio(struct bdr_ring_buffer *rb, struct bio *bio)
+{
+	struct bio_vec bvec;
+	struct bvec_iter iter;
+
+	/* iterate through bvecs and send them to userspace */
+	bio_for_each_segment(bvec, bio, iter) {
+		/* write the page to shared buffer */
+		bdr_put_write_to_buffer(rb, bio, &bvec, &iter);
+	}
+	
+	wake_up_interruptible(&bdr_wait_queue);
+}
+
+
 static int bdr_target_map(struct dm_target *ti, struct bio *bio)
 {
 	struct bdr_context *bc = (struct bdr_context*)ti->private;
+
+	bool is_write = op_is_write(bio_op(bio));
+	bool buffer_overflow = bdr_ring_buffer_is_full(&bc->ring_buf);
+
+	if(is_write && !buffer_overflow) {
+		bdr_submit_bio(&bc->ring_buf, bio);
+	}
+
 	bio_set_dev(bio, bc->dev->bdev);
 
 	/* calculates the new sector offset within the underlying device */
@@ -277,7 +336,6 @@ struct target_type bdr_target_fops = {
 	.ctr = bdr_target_ctr,
 	.dtr = bdr_target_dtr,
 	.map = bdr_target_map,
-	/* TODO: status, suspend, resume, ... */
 };
 
 /*

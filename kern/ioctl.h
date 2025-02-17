@@ -19,5 +19,6 @@ struct bdr_target_info bdr_get_target_info(struct bdr_ring_buffer *rb);
 #define BDR_MAGIC 'B'
 #define BDR_CMD_GET_BUFFER_INFO _IOR(BDR_MAGIC, 1, struct bdr_buffer_info)
 #define BDR_CMD_GET_TARGET_INFO _IOR(BDR_MAGIC, 2, struct bdr_target_info)
+#define BDR_CMD_GET_STATUS _IOR(BDR_MAGIC, 3, enum bdr_status)
 
 #endif

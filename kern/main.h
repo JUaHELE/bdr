@@ -5,6 +5,13 @@
 
 #define BDR_MAX_DEVICES 64
 
+
+enum bdr_status {
+	ACTIVE,
+	OVERFLOWING,
+	STOPPED,
+};
+
 /*
  * context for bdr
  */
@@ -24,12 +31,8 @@ struct bdr_context {
 	/* character device name */
 	char* chardev_name;
 
-	enum  {
-		ACTIVE,
-		OVERFLOWING,
-		STOPPED,
-	} status;
-
+	/* state of the replication */
+	enum bdr_status status;
 };
 
 #endif
