@@ -23,6 +23,12 @@ struct bdr_write_info {
 #define BDR_WRITE_INFO_SIZE sizeof(struct bdr_write_info)
 #define BDR_WRITES_TO_BYTES(n) (n * BDR_WRITE_INFO_SIZE)
 
+struct bdr_buffer_stats {
+	atomic_t total_writes;
+	atomic_t overflow_count;
+	atomic_t total_reads;
+};
+
 /*
  * holds information about new writes in the buffer
  */
@@ -51,6 +57,8 @@ struct bdr_ring_buffer {
 	struct bdr_buffer_info buffer_info;
 
 	spinlock_t lock;
+
+	struct bdr_buffer_stats stats;
 };
 
 /*
@@ -77,10 +85,13 @@ bdr_ring_buffer_get_info(struct bdr_ring_buffer *rb);
  */
 bool bdr_ring_buffer_is_full(struct bdr_ring_buffer *rb);
 
+/*
+ * increments lenght of the buffer by 1 and checks overflow
+ */
 void bdr_ring_buffer_update_unsafe(struct bdr_ring_buffer *rb);
 
 /*
- * resets buffer information - when buffer overflown
+ * resets buffer information
  */
 void bdr_ring_buffer_reset(struct bdr_ring_buffer *rb);
 

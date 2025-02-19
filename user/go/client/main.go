@@ -8,12 +8,19 @@ import (
 	"unsafe"
 )
 
+type atomic_t int32
+type BufferStats struct {
+	TotalWrites atomic_t;
+	OverflowCount atomic_t;
+	TotalReads atomic_t;
+}
+
 type BufferInfo struct {
 	Offset    uint64
 	Length    uint64
 	Last      uint64
 	Flags     uint32
-	MaxWrites uint32
+	MaxWrites uint64
 }
 
 type TargetInfo struct {

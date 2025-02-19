@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"os"
+	"testing"
 )
 
 func PrintOnError(err error) {
@@ -15,6 +16,20 @@ func ExitOnError(err error) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[ERROR]: ", err)
 		os.Exit(1)
+	}
+}
+
+func AssertEqual(t *testing.T, expected, actual uintptr, msg string) {
+	t.Helper()
+	if expected != actual {
+		t.Errorf("%s: expected %d, got %d", msg, expected, actual)
+	}
+}
+
+func AssertInRange(t *testing.T, value, min, max uint64, name string) {
+	t.Helper()
+	if value < min || value > max {
+		t.Errorf("%s (%d) not in range [%d, %d]", name, value, min, max)
 	}
 }
 

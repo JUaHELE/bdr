@@ -19,6 +19,9 @@
 
 #include "ring-buffer.h"
 
+
+// TODO:__attribute__((aligned(64)))
+
 /*
  * initiates and allocates resources
  * size is a number which describes how many actual writes fit into the buffer
@@ -40,6 +43,8 @@ int bdr_ring_buffer_init(struct bdr_ring_buffer *rb, unsigned int max_writes)
 	rb->buffer_info.max_writes = max_writes;
 
 	spin_lock_init(&rb->lock);
+
+	memset(&rb->stats, 0, sizeof(rb->stats));
 
 	return 0;
 }

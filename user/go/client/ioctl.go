@@ -29,9 +29,15 @@ const (
 	BDR_MAGIC = 'B'
 )
 
+type enum_t uint32
+
 var (
 	BDR_CMD_GET_BUFFER_INFO = _IOR(BDR_MAGIC, 1, unsafe.Sizeof(BufferInfo{}))
 	BDR_CMD_GET_TARGET_INFO = _IOR(BDR_MAGIC, 2, unsafe.Sizeof(TargetInfo{}))
+
+	/* 8 is size of long unsigned int which is used as an enum */
+	enum_helper enum_t = 0
+	BDR_CMD_GET_STATUS = _IOR(BDR_MAGIC, 3, unsafe.Sizeof(enum_helper))
 )
 
 func ioctl(fd, request, arg uintptr) error {
