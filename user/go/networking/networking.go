@@ -1,5 +1,9 @@
 package networking
 
+import (
+	"encoding/gob"
+)
+
 type WriteInfo struct {
 	Sector uint32
 	Size   uint32

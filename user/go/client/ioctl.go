@@ -38,6 +38,9 @@ var (
 	/* 8 is size of long unsigned int which is used as an enum */
 	enum_helper enum_t = 0
 	BDR_CMD_GET_STATUS = _IOR(BDR_MAGIC, 3, unsafe.Sizeof(enum_helper))
+
+	/* waits if there are no new writes available */
+	BDR_CMD_GET_BUFFER_INFO_WAIT = _IOR(BDR_MAGIC, 4, unsafe.Sizeof(BufferInfo{}))
 )
 
 func ioctl(fd, request, arg uintptr) error {

@@ -1,18 +1,21 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"strings"
-	"flag"
 )
 
 const (
-	DefaultCharDevicePath  = "ja s pisnickou jdu jako ptacek"
-	DefaultUnderDevicePath = "sladke mameni"
-	DefaultIpAddress       = "la da da da da"
-	DefaultPort            = 123456789
-	DefaultFullScan        = false
-	DefaultVerbose         = false
+	DefaultCharDevicePath     = "mandatory"
+	DefaultUnderDevicePath    = "mandatory"
+	DefaultIpAddress          = "mandatory"
+	DefaultPort               = 0
+	DefaultFullScan           = false
+	DefaultVerbose            = false
+	DefaultDebug              = false
+	DefaultFullReplication    = false
+	DefaultCheckedReplication = false
 )
 
 // Config holds data passed by arguments
@@ -22,6 +25,13 @@ type Config struct {
 	IpAddress       string // ip address of a server where to store backup
 	Port            int    // port of the server
 	Verbose         bool   // verbose output of the program
+	Debug           bool   // includes debug prints to verbose
+
+	// replicates the whole disk without checking hashes of blocks
+	FullReplication bool
+
+	// compares disks if they are the same by doing checksums of blocks
+	CheckedReplication bool
 }
 
 /* validate arguments that are passed in the program */
@@ -33,7 +43,7 @@ func ValidateArgs(charDevicePath *string, underDevicePath *string, ipAddress *st
 		missingArgs = append(missingArgs, "-c (character device path)")
 	}
 	if underDevicePath == nil || *underDevicePath == DefaultUnderDevicePath {
-		missingArgs = append(missingArgs, "-d ( device path)")
+		missingArgs = append(missingArgs, "-d (device path)")
 	}
 	if ipAddress == nil || *ipAddress == DefaultIpAddress {
 		missingArgs = append(missingArgs, "-I (IP address)")
@@ -50,8 +60,16 @@ func ValidateArgs(charDevicePath *string, underDevicePath *string, ipAddress *st
 	return nil
 }
 
+/* prints if verbose or debug prints are on */
 func (c *Config) VerbosePrintln(args ...interface{}) {
-	if c.Verbose {
+	if c.Verbose || c.Debug {
+		fmt.Println(args...)
+	}
+}
+
+/* prints olny if debug option is on */
+func (c *Config) DebugPrintln(args ...interface{}) {
+	if c.Debug {
 		fmt.Println(args...)
 	}
 }
@@ -60,10 +78,13 @@ func NewConfig() *Config {
 	cfg := &Config{}
 
 	flag.StringVar(&cfg.CharDevicePath, "c", DefaultCharDevicePath, "Path to character device we communicate with")
-	flag.StringVar(&cfg.UnderDevicePath, "d", DefaultUnderDevicePath, "Path to underlying device, for full scan")
+	flag.StringVar(&cfg.UnderDevicePath, "d", DefaultUnderDevicePath, "Path to underlying device, used for reads for full scan")
 	flag.StringVar(&cfg.IpAddress, "I", DefaultIpAddress, "Receiver IP address")
 	flag.IntVar(&cfg.Port, "p", DefaultPort, "Receiver port")
 	flag.BoolVar(&cfg.Verbose, "v", DefaultVerbose, "Provides verbose output of the program")
+	flag.BoolVar(&cfg.Debug, "D", DefaultDebug, "Provides debug output of the program")
+	flag.BoolVar(&cfg.FullReplication, "r", DefaultFullReplication, "Provides debug output of the program")
+	flag.BoolVar(&cfg.CheckedReplication, "R", DefaultCheckedReplication, "Provides debug output of the program")
 	flag.Parse()
 	return cfg
 }

@@ -112,27 +112,40 @@ static long bdr_chardev_ioctl(struct file *filp, unsigned int cmd, unsigned long
 {
 	struct bdr_context *bc = filp->private_data;
 	struct bdr_ring_buffer *rb = &bc->ring_buf;
+	struct bdr_buffer_info buffer_info;
+	struct bdr_target_info target_info;
+	enum bdr_status status;
+
 	int ret = 0;
 
 	switch(cmd) {
 	case BDR_CMD_GET_BUFFER_INFO:
-		struct bdr_buffer_info buffer_info = bdr_ring_buffer_get_info(rb);
+		buffer_info = bdr_ring_buffer_get_info(rb);
 		if (copy_to_user((void __user *)arg, &buffer_info, sizeof(buffer_info))) {
 			ret = -EFAULT;
 		}
 		break;
 	case BDR_CMD_GET_TARGET_INFO:
-		struct bdr_target_info target_info = bdr_get_target_info(rb);
+		target_info = bdr_get_target_info(rb);
 		if (copy_to_user((void __user *)arg, &target_info, sizeof(target_info))) {
 			ret = -EFAULT;
 		}
 		break;
 	case BDR_CMD_GET_STATUS:
-		enum bdr_status status = bc->status;
+		status = bc->status;
 		if (copy_to_user((void __user *)arg, &status, sizeof(status))) {
 			ret = -EFAULT;
 		}
 		break;
+	case BDR_CMD_GET_BUFFER_INFO_WAIT:
+		wait_event_interruptible(bdr_wait_queue, rb->buffer_info.length != 0);
+
+		buffer_info = bdr_ring_buffer_get_info(rb);
+		if (copy_to_user((void __user *)arg, &buffer_info, sizeof(buffer_info))) {
+			ret = -EFAULT;
+		}
+		break;
+
 	default:
 		pr_warn("Ioctl not recognized: cmd=%u\n", cmd);
 		ret = -ENOTTY;

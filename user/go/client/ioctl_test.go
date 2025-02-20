@@ -59,7 +59,7 @@ func isValidPageSize(size uint64) bool {
 // TestDeviceIoctls tests the actual device IOCTLs
 func TestDeviceIoctls(t *testing.T) {
 	// try to open the device, skip if the device doesnt exist
-	fd, err := os.OpenFile(devicePath, os.O_RDWR, 0)
+	fd, err := os.OpenFile("/dev/bdr-1", os.O_RDWR, 0)
 	if err != nil {
 		t.Skipf("Skipping device tests: %v", err)
 		return
