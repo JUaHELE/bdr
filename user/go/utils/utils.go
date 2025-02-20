@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+func Bit(nr uint) uint32 { return 1 << nr }
+
 func PrintOnError(err error) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[ERROR]: ", err)

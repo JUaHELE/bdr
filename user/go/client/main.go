@@ -11,6 +11,7 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+	"bdr/utils"
 )
 
 type atomic_t int32
@@ -45,12 +46,24 @@ type Client struct {
 	Buf          []byte   // Shared buffer between kernel and userspace where writes will be saved
 }
 
+var (
+	BufferOverflownFlag = utils.Bit(0)
+)
+
+func (c *Client) Println(args ...interface{}) {
+	c.Config.Println(args...)
+}
+
 func (c *Client) VerbosePrintln(args ...interface{}) {
-	c.Config.VerbosePrintln(args)
+	c.Config.VerbosePrintln(args...)
 }
 
 func (c *Client) DebugPrintln(args ...interface{}) {
-	c.Config.DebugPrintln(args)
+	c.Config.DebugPrintln(args...)
+}
+
+func CheckBufferOverflow(flags uint32) bool {
+	return (flags & BufferOverflownFlag) != 0
 }
 
 func NewClient(cfg *Config) (*Client, error) {
@@ -120,13 +133,13 @@ func (c *Client) Close() {
 }
 
 func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
-
+	defer wg.Done()
 	// reader := bytes.NewReader(nil)
 
 	for {
 		select {
 		case <-termChan:
-			fmt.Println("Stopping change monitoring due to shutdown.")
+			c.VerbosePrintln("Stopping change monitoring due to shutdown.")
 			return
 		default:
 			var bufferInfo BufferInfo
@@ -140,25 +153,20 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 
 func (c *Client) Run() {
 	termChan := make(chan struct{})
+	signalChan := make(chan os.Signal, 1)
+
 	var termWg sync.WaitGroup
-
-	// TODO: perform replication at the start
-
-	termWg.Add(1)
+	termWg.Add(1) // Indicate we're starting one goroutine
 	go c.MonitorChanges(termChan, &termWg)
 
-	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
-	<-signalChan
-	c.VerbosePrintln("Interrupt signal received. Shutting down...")
+	<-signalChan // Block until signal received
 
-	close(termChan)
-
-	termWg.Wait()
-	c.Close()
-
-	fmt.Println("Sender daemon gracefully terminated.")
+	c.Println("Interrupt signal received. Shutting down...")
+	close(termChan) // Signal monitor to stop
+	termWg.Wait()   // Wait for monitor to finish
+	c.Close()       // Clean up
 }
 
 func main() {
