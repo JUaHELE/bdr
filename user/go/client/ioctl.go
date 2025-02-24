@@ -32,15 +32,17 @@ const (
 type enum_t uint32
 
 var (
-	BDR_CMD_GET_BUFFER_INFO = _IOR(BDR_MAGIC, 1, unsafe.Sizeof(BufferInfo{}))
-	BDR_CMD_GET_TARGET_INFO = _IOR(BDR_MAGIC, 2, unsafe.Sizeof(TargetInfo{}))
+	BDR_CMD_GET_TARGET_INFO = _IOR(BDR_MAGIC, 1, unsafe.Sizeof(TargetInfo{}))
 
-	/* 8 is size of long unsigned int which is used as an enum */
 	enum_helper enum_t = 0
-	BDR_CMD_GET_STATUS = _IOR(BDR_MAGIC, 3, unsafe.Sizeof(enum_helper))
+	BDR_CMD_GET_STATUS = _IOR(BDR_MAGIC, 2, unsafe.Sizeof(enum_helper))
 
+	BDR_CMD_GET_BUFFER_INFO = _IOR(BDR_MAGIC, 3, unsafe.Sizeof(BufferInfo{}))
 	/* waits if there are no new writes available */
 	BDR_CMD_GET_BUFFER_INFO_WAIT = _IOR(BDR_MAGIC, 4, unsafe.Sizeof(BufferInfo{}))
+
+	BDR_CMD_READ_BUFFER_INFO = _IOR(BDR_MAGIC, 5, unsafe.Sizeof(BufferInfo{}))
+	BDR_CMD_READ_BUFFER_INFO_WAIT = _IOR(BDR_MAGIC, 6, unsafe.Sizeof(BufferInfo{}))
 )
 
 func ioctl(fd, request, arg uintptr) error {
@@ -50,3 +52,7 @@ func ioctl(fd, request, arg uintptr) error {
 	}
 	return nil
 }
+
+const (
+	PollInterval = 100 // in milliseconds
+)

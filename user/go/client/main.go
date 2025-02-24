@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+	"time"
 )
 
 type atomic_t int32
@@ -74,6 +75,7 @@ func NewClient(cfg *Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("falied to open charecter device: %w", err)
 	}
+
 
 	var targetInfo TargetInfo
 	err = ioctl(charDevFd.Fd(), BDR_CMD_GET_TARGET_INFO, uintptr(unsafe.Pointer(&targetInfo)))
@@ -137,6 +139,10 @@ func (c *Client) Close() {
 	}
 }
 
+func (c *Client) CheckNewWrites(bufferInfo *BufferInfo) bool {
+	return bufferInfo.Length != 0
+}
+
 func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 	// reader := bytes.NewReader(nil)
@@ -149,17 +155,29 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 		}
 
 		var bufferInfo BufferInfo
-		err := ioctl(c.CharDevFile.Fd(), BDR_CMD_GET_BUFFER_INFO_WAIT, uintptr(unsafe.Pointer(&bufferInfo)))
+		err := ioctl(c.CharDevFile.Fd(), BDR_CMD_GET_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 		if err != nil {
 			log.Printf("ioctl syscall failed: %v", err)
+			time.Sleep(1 * time.Second)
+			continue
 		}
 
+		newWrites := c.CheckNewWrites(&bufferInfo)
+		if !newWrites {
+			c.DebugPrintln("No information available, waiting...")
+			time.Sleep(PollInterval * time.Millisecond)
+			continue
+		}
+		
+		fmt.Println("Some information found!!")
 	}
 }
 
 func (c *Client) Run() {
 	termChan := make(chan struct{})
 	signalChan := make(chan os.Signal, 1)
+
+	c.Println("Starting bdr client daemon...")
 
 	var termWg sync.WaitGroup
 	termWg.Add(1) // Indicate we're starting one goroutine
@@ -173,6 +191,8 @@ func (c *Client) Run() {
 	close(termChan) // Signal monitor to stop
 	termWg.Wait()   // Wait for monitor to finish
 	c.Close()       // Clean up
+
+	c.Println("bdr client daemon terminated successfully.")
 }
 
 func main() {

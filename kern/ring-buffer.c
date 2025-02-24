@@ -28,11 +28,13 @@
  */
 int bdr_ring_buffer_init(struct bdr_ring_buffer *rb, unsigned int max_writes)
 {
+	unsigned long buf_size;
+
 	if (!rb || max_writes == 0) {
 		return -EINVAL;
 	}
 	
-	unsigned long buf_size = BDR_WRITES_TO_BYTES(max_writes);
+	buf_size = BDR_WRITES_TO_BYTES(max_writes);
 
 	rb->buffer = vmalloc(PAGE_ALIGN(buf_size));
 	if(!rb->buffer) {
@@ -44,8 +46,6 @@ int bdr_ring_buffer_init(struct bdr_ring_buffer *rb, unsigned int max_writes)
 
 	spin_lock_init(&rb->lock);
 
-	memset(&rb->stats, 0, sizeof(rb->stats));
-
 	return 0;
 }
 
@@ -54,7 +54,10 @@ int bdr_ring_buffer_init(struct bdr_ring_buffer *rb, unsigned int max_writes)
  */
 void bdr_ring_buffer_free(struct bdr_ring_buffer *rb)
 {
-	vfree(rb->buffer);
+	if (rb && rb->buffer) {
+		vfree(rb->buffer);
+		rb->buffer = NULL;
+	}
 }
 
 
@@ -101,15 +104,14 @@ bool bdr_ring_buffer_is_full(struct bdr_ring_buffer *rb)
 void bdr_ring_buffer_update_unsafe(struct bdr_ring_buffer *rb)
 {
 	struct bdr_buffer_info *buffer_info;
+	unsigned long buffer_offset;
+
 	buffer_info = &rb->buffer_info;
 
 	buffer_info->length += 1;
 
 	/* in this function we also check whether the buffer overflown: */
-	unsigned long buffer_offset = buffer_info->offset + buffer_info->length;
-
-	/* need to modulo so it fits into the buffer */
-	buffer_offset %= rb->buffer_info.max_writes;
+	buffer_offset = (buffer_info->offset + buffer_info->length) % buffer_info->max_writes;
 
 	if (buffer_offset == buffer_info->last) {
 		buffer_info->flags |= BDR_OVERFLOWN_BUFFER_FLAG;
@@ -126,15 +128,45 @@ void bdr_ring_buffer_reset(struct bdr_ring_buffer *rb)
 	spin_unlock(&rb->lock);
 }
 
-void bdr_ring_buffer_read_unsafe(struct bdr_ring_buffer *rb) {
-	struct bdr_buffer_info *buffer_info;
 
-	buffer_info = &rb->buffer_info;
+/*
+ * is called whenever userpace wants to know location of new writes
+ * the previous buffer info is passed to the userspace and new offsets are
+ * appropriately calculated
+ */
+struct bdr_buffer_info bdr_buffer_read_routine(struct bdr_ring_buffer *rb) {
+	struct bdr_buffer_info buffer_info;
+	bool is_full;
+	
+	spin_lock(&rb->lock);
+	
+	buffer_info = rb->buffer_info;
+	is_full = buffer_info.flags & BDR_OVERFLOWN_BUFFER_FLAG;
+	
+	if (is_full) {
+		/* Reset the buffer if it's full */
+		rb->buffer_info.offset = 0;
+		rb->buffer_info.length = 0;
+		rb->buffer_info.last = 0;
+		rb->buffer_info.flags = 0;
+	} else {
+		/* Mark old data as read */
+		rb->buffer_info.last = rb->buffer_info.offset;
+		rb->buffer_info.offset = (rb->buffer_info.offset + rb->buffer_info.length) % rb->buffer_info.max_writes;
+		rb->buffer_info.length = 0;
+	}
+	
+	spin_unlock(&rb->lock);
+	
+	return buffer_info;
+}
 
-	buffer_info->last = buffer_info->offset;
-	buffer_info->offset += buffer_info->length;
-	buffer_info->offset %= rb->buffer_info.max_writes;
-	buffer_info->length = 0;
+void bdr_ring_buffer_read(struct bdr_ring_buffer *rb) {
+	spin_lock(&rb->lock);
+	rb->buffer_info.last = rb->buffer_info.offset;
+	rb->buffer_info.offset = (rb->buffer_info.offset + rb->buffer_info.length) % rb->buffer_info.max_writes;
+	rb->buffer_info.length = 0;
+	spin_unlock(&rb->lock);
 }
 
 int bdr_ring_buffer_put(struct bdr_ring_buffer *rb, unsigned int sector, unsigned int size, struct page *page, unsigned int page_offset, unsigned int length)

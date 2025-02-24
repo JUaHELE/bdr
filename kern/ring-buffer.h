@@ -57,8 +57,6 @@ struct bdr_ring_buffer {
 	struct bdr_buffer_info buffer_info;
 
 	spinlock_t lock;
-
-	struct bdr_buffer_stats stats;
 };
 
 /*
@@ -98,7 +96,13 @@ void bdr_ring_buffer_reset(struct bdr_ring_buffer *rb);
 /*
  * read from buffer - new writes are expecting to be read
  */
-void bdr_ring_buffer_read_unsafe(struct bdr_ring_buffer *rb);
+void bdr_ring_buffer_read(struct bdr_ring_buffer *rb);
+
+/*
+ * routine for updating the buffer after userspace reads from it
+ */
+struct bdr_buffer_info
+bdr_buffer_read_routine(struct bdr_ring_buffer *rb);
 
 /*
  * puts data into the buffer

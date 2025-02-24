@@ -7,9 +7,9 @@ import (
 )
 
 const (
-	DefaultCharDevicePath     = "mandatory"
-	DefaultUnderDevicePath    = "mandatory"
-	DefaultIpAddress          = "mandatory"
+	DefaultCharDevicePath     = "required"
+	DefaultUnderDevicePath    = "required"
+	DefaultIpAddress          = "required"
 	DefaultPort               = 0
 	DefaultFullScan           = false
 	DefaultVerbose            = false
@@ -91,15 +91,15 @@ func (c *Config) DebugPrintln(args ...interface{}) {
 func NewConfig() *Config {
 	cfg := &Config{}
 
-	flag.StringVar(&cfg.CharDevicePath, "c", DefaultCharDevicePath, "Path to character device we communicate with")
-	flag.StringVar(&cfg.UnderDevicePath, "d", DefaultUnderDevicePath, "Path to underlying device, used for reads for full scan")
+	flag.StringVar(&cfg.CharDevicePath, "c", DefaultCharDevicePath, "Path to bdr character device")
+	flag.StringVar(&cfg.UnderDevicePath, "d", DefaultUnderDevicePath, "Path to underlying device, used for only for reading")
 	flag.StringVar(&cfg.IpAddress, "I", DefaultIpAddress, "Receiver IP address")
 	flag.IntVar(&cfg.Port, "p", DefaultPort, "Receiver port")
 	flag.BoolVar(&cfg.Verbose, "v", DefaultVerbose, "Provides verbose output of the program")
 	flag.BoolVar(&cfg.Debug, "D", DefaultDebug, "Provides debug output of the program")
-	flag.BoolVar(&cfg.FullReplication, "r", DefaultFullReplication, "Provides debug output of the program")
-	flag.BoolVar(&cfg.CheckedReplication, "R", DefaultCheckedReplication, "Provides debug output of the program")
-	flag.BoolVar(&cfg.NoPrint, "n", DefaultNoPrint, "Doesn't print anything.")
+	flag.BoolVar(&cfg.FullReplication, "r", DefaultFullReplication, "Replicates whole device over the network")
+	flag.BoolVar(&cfg.CheckedReplication, "R", DefaultCheckedReplication, "Initiates checked replication. Compares checksums of blocks on local and remote device, and those blocks are exchanged in case of missmatch")
+	flag.BoolVar(&cfg.NoPrint, "n", DefaultNoPrint, "Disables prints")
 	flag.Parse()
 	return cfg
 }
