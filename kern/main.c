@@ -146,11 +146,20 @@ static long bdr_chardev_ioctl(struct file *filp, unsigned int cmd, unsigned long
 		}
 		break;
 	case BDR_CMD_READ_BUFFER_INFO:
-		buffer_info = bdr_ring_buffer_get_info(rb);
+		buffer_info = bdr_buffer_read_routine(rb);
 		if (copy_to_user((void __user *)arg, &buffer_info, sizeof(buffer_info))) {
 			ret = -EFAULT;
 		}
 		break;
+	case BDR_CMD_READ_BUFFER_INFO_WAIT:
+		wait_event_interruptible(bdr_wait_queue, rb->buffer_info.length != 0);
+
+		buffer_info = bdr_buffer_read_routine(rb);
+		if (copy_to_user((void __user *)arg, &buffer_info, sizeof(buffer_info))) {
+			ret = -EFAULT;
+		}
+		break;
+
 
 	default:
 		pr_warn("Ioctl not recognized: cmd=%u\n", cmd);
@@ -319,7 +328,7 @@ static void bdr_submit_bio(struct bdr_ring_buffer *rb, struct bio *bio)
 		/* write the page to shared buffer */
 		bdr_put_write_to_buffer(rb, bio, &bvec, &iter);
 	}
-	
+
 	wake_up_interruptible(&bdr_wait_queue);
 }
 

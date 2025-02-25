@@ -65,6 +65,18 @@ func (c *Client) DebugPrintln(args ...interface{}) {
 	c.Config.DebugPrintln(args...)
 }
 
+func (b BufferStats) Print() {
+	fmt.Printf("BufferStats { TotalWrites: %d, OverflowCount: %d, TotalReads: %d }\n", b.TotalWrites, b.OverflowCount, b.TotalReads)
+}
+
+func (b BufferInfo) Print() {
+	fmt.Printf("BufferInfo { Offset: %d, Length: %d, Last: %d, Flags: %d, MaxWrites: %d }\n", b.Offset, b.Length, b.Last, b.Flags, b.MaxWrites)
+}
+
+func (t TargetInfo) Print() {
+	fmt.Printf("TargetInfo { PageSize: %d, WriteInfoSize: %d, BufferByteSize: %d }\n", t.PageSize, t.WriteInfoSize, t.BufferByteSize)
+}
+
 func CheckBufferOverflow(flags uint32) bool {
 	return (flags & BufferOverflownFlag) != 0
 }
@@ -155,7 +167,7 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 		}
 
 		var bufferInfo BufferInfo
-		err := ioctl(c.CharDevFile.Fd(), BDR_CMD_GET_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+		err := ioctl(c.CharDevFile.Fd(), BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 		if err != nil {
 			log.Printf("ioctl syscall failed: %v", err)
 			time.Sleep(1 * time.Second)
@@ -164,12 +176,14 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 
 		newWrites := c.CheckNewWrites(&bufferInfo)
 		if !newWrites {
+			bufferInfo.Print()
 			c.DebugPrintln("No information available, waiting...")
 			time.Sleep(PollInterval * time.Millisecond)
 			continue
 		}
 		
 		fmt.Println("Some information found!!")
+		bufferInfo.Print()
 	}
 }
 

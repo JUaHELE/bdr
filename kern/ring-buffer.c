@@ -171,29 +171,38 @@ void bdr_ring_buffer_read(struct bdr_ring_buffer *rb) {
 
 int bdr_ring_buffer_put(struct bdr_ring_buffer *rb, unsigned int sector, unsigned int size, struct page *page, unsigned int page_offset, unsigned int length)
 {
-	if (bdr_ring_buffer_is_full(rb))
-		return -ENOSPC;
+	struct bdr_buffer_info buffer_info;
+	unsigned long buffer_offset;
+	struct bdr_write_info *target_slot;
+	void *page_addr;
+	unsigned int copy_len;
 
 	/* Acquire lock and update buffer state, has to be in one lock since weird things could happen */
 	spin_lock(&rb->lock);
-	struct bdr_buffer_info buffer_info = rb->buffer_info;
+	
+	if (rb->buffer_info.flags & BDR_OVERFLOWN_BUFFER_FLAG) {
+		spin_unlock(&rb->lock);
+		return -ENOSPC;
+	}
+
+	buffer_info = rb->buffer_info;
 	bdr_ring_buffer_update_unsafe(rb);
 	spin_unlock(&rb->lock);
 
 	
 	/* Calculate buffer offset and wrap around as needed */
-	unsigned long buffer_offset = (buffer_info.offset + buffer_info.length) % rb->buffer_info.max_writes;
+	buffer_offset = (buffer_info.offset + buffer_info.length) % rb->buffer_info.max_writes;
 	buffer_offset *= BDR_WRITE_INFO_SIZE;
 
 	/* Prepare target location in the ring buffer */
-	struct bdr_write_info *target_slot = (struct bdr_write_info *)(rb->buffer + buffer_offset);
+	target_slot = (struct bdr_write_info *)(rb->buffer + buffer_offset);
 
 	target_slot->sector = sector;
 	target_slot->size = size;
 
 	/* Calculate length to copy and map page for read */
-	unsigned int copy_len = min(length, PAGE_SIZE - page_offset);
-	void *page_addr = kmap_local_page(page);
+	copy_len = min(length, PAGE_SIZE - page_offset);
+	page_addr = kmap_local_page(page);
 
 	/* Copy the specified data into the ring buffer and unmap page */
 	memcpy(target_slot->data, page_addr + page_offset, copy_len);
