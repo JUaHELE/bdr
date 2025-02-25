@@ -77,8 +77,12 @@ func (t TargetInfo) Print() {
 	fmt.Printf("TargetInfo { PageSize: %d, WriteInfoSize: %d, BufferByteSize: %d }\n", t.PageSize, t.WriteInfoSize, t.BufferByteSize)
 }
 
-func CheckBufferOverflow(flags uint32) bool {
-	return (flags & BufferOverflownFlag) != 0
+func (b BufferInfo) CheckOverflow() bool {
+	return (b.Flags & BufferOverflownFlag) != 0
+}
+
+func (c *Client) CheckNewWrites(bufferInfo *BufferInfo) bool {
+	return bufferInfo.Length != 0
 }
 
 func NewClient(cfg *Config) (*Client, error) {
@@ -151,8 +155,8 @@ func (c *Client) Close() {
 	}
 }
 
-func (c *Client) CheckNewWrites(bufferInfo *BufferInfo) bool {
-	return bufferInfo.Length != 0
+func (c *Client) PerformCheckedReplication(termChan <-chan struct{}) {
+
 }
 
 func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
@@ -161,11 +165,13 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 	pauseController := c.MonitorPauseContr
 
 	for {
+		// check if there was a termination signal or pause signal sent
 		if terminated := pauseController.WaitIfPaused(termChan); terminated {
 			c.VerbosePrintln("Stopping change monitoring due to shutdown.")
 			return
 		}
 
+		// using ioctl to get information from my character device assotiated to my device mapper target
 		var bufferInfo BufferInfo
 		err := ioctl(c.CharDevFile.Fd(), BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 		if err != nil {
@@ -174,11 +180,39 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 			continue
 		}
 
+		// check if new write infomation can be found within the buffer, if not we'll wait and try again
 		newWrites := c.CheckNewWrites(&bufferInfo)
 		if !newWrites {
-			bufferInfo.Print()
 			c.DebugPrintln("No information available, waiting...")
 			time.Sleep(PollInterval * time.Millisecond)
+			continue
+		}
+
+		// check if buffer overflown, the devices are now inconsistent
+		overflow := bufferInfo.CheckOverflow()
+		if overflow {
+			c.VerbosePrintln("Buffer overflown...")
+
+			// we need to check what parts of the disk are inconsistent, first we need to make sure there is no work being done on the disk, because while we scan the buffer might oveflow again
+			for {
+				err := ioctl(c.CharDevFile.Fd(), BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+				if err != nil {
+					log.Printf("ioctl syscall failed: %v", err)
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				newWrites = c.CheckNewWrites(&bufferInfo)
+				if newWrites {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				break
+			}
+
+			c.PerformCheckedReplication(termChan)
+
 			continue
 		}
 		
