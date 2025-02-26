@@ -2,8 +2,8 @@ package main
 
 import (
 	"bdr/networking"
-	"bdr/utils"
 	"bdr/pause"
+	"bdr/utils"
 	"encoding/gob"
 	"fmt"
 	"log"
@@ -12,8 +12,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-	"unsafe"
 	"time"
+	"unsafe"
 )
 
 type atomic_t int32
@@ -44,13 +44,18 @@ type Client struct {
 	Encoder           *gob.Encoder
 	Decoder           *gob.Decoder
 	UnderDevFile      *os.File
-	CharDevFile       *os.File         // Path to character device which is used for communication with kernel
-	Buf               []byte           // Shared buffer between kernel and userspace where writes will be saved
+	CharDevFile       *os.File               // Path to character device which is used for communication with kernel
+	Buf               []byte                 // Shared buffer between kernel and userspace where writes will be saved
 	MonitorPauseContr *pause.PauseController // used to pause monitor changes function
 }
 
 var (
 	BufferOverflownFlag = utils.Bit(0)
+)
+
+const (
+	PollInterval  = 100 // in milliseconds
+	RetryInterval = 1   // seconds
 )
 
 func (c *Client) Println(args ...interface{}) {
@@ -81,8 +86,12 @@ func (b BufferInfo) CheckOverflow() bool {
 	return (b.Flags & BufferOverflownFlag) != 0
 }
 
-func (c *Client) CheckNewWrites(bufferInfo *BufferInfo) bool {
-	return bufferInfo.Length != 0
+func (b BufferInfo) HasNewWrites() bool {
+	return b.Length != 0
+}
+
+func (c *Client) executeIOCTL(cmd uintptr, arg uintptr) error {
+	return ioctl(c.CharDevFile.Fd(), cmd, arg)
 }
 
 func NewClient(cfg *Config) (*Client, error) {
@@ -91,7 +100,6 @@ func NewClient(cfg *Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("falied to open charecter device: %w", err)
 	}
-
 
 	var targetInfo TargetInfo
 	err = ioctl(charDevFd.Fd(), BDR_CMD_GET_TARGET_INFO, uintptr(unsafe.Pointer(&targetInfo)))
@@ -161,6 +169,27 @@ func (c *Client) PerformCheckedReplication(termChan <-chan struct{}) {
 	// the super duper fast function
 }
 
+func (c *Client) ResetBuffer(termChan <-chan struct{}) bool {
+	c.VerbosePrintln("Resetting buffer...")
+	/*
+		for {
+			err := c.executeIOCTL(BDR_CMD_RESET_BUFFER, 0)
+			if err != nil {
+				if terminated := pauseController.WaitIfPaused(termChan); terminated {
+					c.VerbosePrintln("Stopping change monitoring due to shutdown.")
+					return true
+				}
+
+				c.VerbosePrintln("IOCTL reset buffer failed:", err)
+				time.Sleep(RetryInterval * time.Second)
+				continue
+			}
+
+			return false
+		}*/
+	return false
+}
+
 func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 	// reader := bytes.NewReader(nil)
@@ -175,15 +204,15 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 
 		// using ioctl to get information from my character device assotiated to my device mapper target
 		var bufferInfo BufferInfo
-		err := ioctl(c.CharDevFile.Fd(), BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+		err := c.executeIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 		if err != nil {
-			log.Printf("ioctl syscall failed: %v", err)
-			time.Sleep(1 * time.Second)
+			c.VerbosePrintln("IOCTL read buffer info failed:", err)
+			time.Sleep(RetryInterval * time.Second)
 			continue
 		}
 
 		// check if new write infomation can be found within the buffer, if not we'll wait and try again
-		newWrites := c.CheckNewWrites(&bufferInfo)
+		newWrites := bufferInfo.HasNewWrites()
 		if !newWrites {
 			c.DebugPrintln("No information available, waiting...")
 			time.Sleep(PollInterval * time.Millisecond)
@@ -197,18 +226,23 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 
 			// we need to check what parts of the disk are inconsistent, first we need to make sure there is no work being done on the disk, because while we scan the buffer might oveflow again
 			for {
-				err := ioctl(c.CharDevFile.Fd(), BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+				if terminated := pauseController.WaitIfPaused(termChan); terminated {
+					c.VerbosePrintln("Stopping change monitoring due to shutdown.")
+					return
+				}
+
+				err := c.executeIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 				if err != nil {
-					log.Printf("ioctl syscall failed: %v", err)
+					c.VerbosePrintln("IOCTL read buffer info failed:", err)
 					// ioctl failed for some reason, trying indefinitelly, until the problem is fixed
-					time.Sleep(1 * time.Second)
+					time.Sleep(RetryInterval * time.Second)
 					continue
 				}
 
-				newWrites = c.CheckNewWrites(&bufferInfo)
+				newWrites = bufferInfo.HasNewWrites()
 				if newWrites {
-					// if new writes are present, there is no point starting replication of the disk, since 
-					time.Sleep(1 * time.Second)
+					// if new writes are present, there is no point starting replication of the disk, since
+					time.Sleep(RetryInterval * time.Second)
 					continue
 				}
 
@@ -217,9 +251,13 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 
 			c.PerformCheckedReplication(termChan)
 
+			if c.ResetBuffer(termChan) {
+				return
+			}
+
 			continue
 		}
-		
+
 		fmt.Println("Some information found!!")
 		bufferInfo.Print()
 	}

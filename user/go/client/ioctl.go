@@ -76,7 +76,3 @@ func ioctl(fd, request, arg uintptr) error {
 	}
 	return nil
 }
-
-const (
-	PollInterval = 100 // in milliseconds
-)
