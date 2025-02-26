@@ -159,7 +159,9 @@ static long bdr_chardev_ioctl(struct file *filp, unsigned int cmd, unsigned long
 			ret = -EFAULT;
 		}
 		break;
-
+	case BDR_CMD_RESET_BUFFER:
+		bdr_ring_buffer_reset(rb);
+		break;
 
 	default:
 		pr_warn("Ioctl not recognized: cmd=%u\n", cmd);

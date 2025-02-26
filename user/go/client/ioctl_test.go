@@ -1,10 +1,10 @@
 package main
 
 import (
+	"bdr/utils"
+	"os"
 	"testing"
 	"unsafe"
-	"os"
-	"bdr/utils"
 )
 
 type MockFd struct {
@@ -126,4 +126,65 @@ func TestDeviceIoctls(t *testing.T) {
 
 		t.Logf("Status: %d", status)
 	})
+
+	t.Run("READ_BUFFER", func(t *testing.T) {
+		var bufferInfo BufferInfo
+		err := ioctl(fd.Fd(), BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+		if err != nil {
+			t.Fatalf("READ_BUFFER failed: %v", err)
+		}
+
+		// check that values are within expected ranges
+		if bufferInfo.MaxWrites == 0 {
+			t.Error("MaxWrites should not be 0")
+		}
+
+		// check Offset is within range 0-MaxWrites
+		utils.AssertInRange(t, bufferInfo.Offset, 0, bufferInfo.MaxWrites, "Offset")
+
+		// check Length is within range 0-MaxWrites
+		utils.AssertInRange(t, bufferInfo.Length, 0, bufferInfo.MaxWrites, "Length")
+
+		// check Last is within range 0-MaxWrites
+		utils.AssertInRange(t, bufferInfo.Last, 0, bufferInfo.MaxWrites, "Last")
+
+		t.Logf("BufferInfo: Offset=%d, Length=%d, Last=%d, Flags=%d, MaxWrites=%d",
+			bufferInfo.Offset, bufferInfo.Length, bufferInfo.Last, bufferInfo.Flags, bufferInfo.MaxWrites)
+
+		err = ioctl(fd.Fd(), BDR_CMD_GET_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+		if err != nil {
+			t.Fatalf("READ_BUFFER failed: %v", err)
+		}
+
+		if bufferInfo.Length != 0 {
+			t.Error("Length of just read buffer should be most probably 0, unless soemthing just wrote there(very unlikely)")
+		}
+	})
+
+	t.Run("RESET_BUFFER", func(t *testing.T) {
+		err := ioctl(fd.Fd(), BDR_CMD_RESET_BUFFER, 0)
+		if err != nil {
+			t.Fatalf("RESET_BUFFER failed: %v", err)
+		}
+
+		var bufferInfo BufferInfo
+		err = ioctl(fd.Fd(), BDR_CMD_GET_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+		if err != nil {
+			t.Fatalf("RESET_BUFFER failed: %v", err)
+		}
+
+		if bufferInfo.Length != 0 ||
+			bufferInfo.Offset != 0 ||
+			bufferInfo.Last != 0 ||
+			bufferInfo.Flags != 0 {
+			t.Error("The buffer was just reset, all values has to be set to 0")
+		}
+
+		t.Logf("BufferInfo: Offset=%d, Length=%d, Last=%d, Flags=%d, MaxWrites=%d",
+			bufferInfo.Offset, bufferInfo.Length, bufferInfo.Last, bufferInfo.Flags, bufferInfo.MaxWrites)
+
+	})
+
+	// read buffer and reset buffer aren't suitable for testing, since it can break functionality
+	// also wait calls can wait indefinitelly
 }

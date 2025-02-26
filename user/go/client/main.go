@@ -156,7 +156,9 @@ func (c *Client) Close() {
 }
 
 func (c *Client) PerformCheckedReplication(termChan <-chan struct{}) {
+	// TODO: reset the buffer
 
+	// the super duper fast function
 }
 
 func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
@@ -198,12 +200,14 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 				err := ioctl(c.CharDevFile.Fd(), BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 				if err != nil {
 					log.Printf("ioctl syscall failed: %v", err)
+					// ioctl failed for some reason, trying indefinitelly, until the problem is fixed
 					time.Sleep(1 * time.Second)
 					continue
 				}
 
 				newWrites = c.CheckNewWrites(&bufferInfo)
 				if newWrites {
+					// if new writes are present, there is no point starting replication of the disk, since 
 					time.Sleep(1 * time.Second)
 					continue
 				}
