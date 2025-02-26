@@ -3,6 +3,7 @@ package main
 import (
 	"syscall"
 	"unsafe"
+	"fmt"
 )
 
 const (
@@ -56,17 +57,35 @@ type enum_t uint32
 var (
 	BDR_CMD_GET_TARGET_INFO = _IOR(BDR_MAGIC, 1, unsafe.Sizeof(TargetInfo{}))
 
-	enum_helper enum_t = 0
-	BDR_CMD_GET_STATUS = _IOR(BDR_MAGIC, 2, unsafe.Sizeof(enum_helper))
+	enum_helper        enum_t = 0
+	BDR_CMD_GET_STATUS        = _IOR(BDR_MAGIC, 2, unsafe.Sizeof(enum_helper))
 
 	/* wait calls wait while no new writes available */
-	BDR_CMD_GET_BUFFER_INFO = _IOR(BDR_MAGIC, 3, unsafe.Sizeof(BufferInfo{}))
-	BDR_CMD_GET_BUFFER_INFO_WAIT = _IOR(BDR_MAGIC, 4, unsafe.Sizeof(BufferInfo{}))
-	BDR_CMD_READ_BUFFER_INFO = _IOR(BDR_MAGIC, 5, unsafe.Sizeof(BufferInfo{}))
+	BDR_CMD_GET_BUFFER_INFO       = _IOR(BDR_MAGIC, 3, unsafe.Sizeof(BufferInfo{}))
+	BDR_CMD_GET_BUFFER_INFO_WAIT  = _IOR(BDR_MAGIC, 4, unsafe.Sizeof(BufferInfo{}))
+	BDR_CMD_READ_BUFFER_INFO      = _IOR(BDR_MAGIC, 5, unsafe.Sizeof(BufferInfo{}))
 	BDR_CMD_READ_BUFFER_INFO_WAIT = _IOR(BDR_MAGIC, 6, unsafe.Sizeof(BufferInfo{}))
 
 	BDR_CMD_RESET_BUFFER = _IO(BDR_MAGIC, 7)
 )
+
+var ioctlCmdNames = map[uintptr]string{
+	BDR_CMD_GET_TARGET_INFO:       "GET_TARGET_INFO",
+	BDR_CMD_GET_STATUS:            "GET_STATUS",
+	BDR_CMD_GET_BUFFER_INFO:       "GET_BUFFER_INFO",
+	BDR_CMD_GET_BUFFER_INFO_WAIT:  "GET_BUFFER_INFO_WAIT",
+	BDR_CMD_READ_BUFFER_INFO:      "READ_BUFFER_INFO",
+	BDR_CMD_READ_BUFFER_INFO_WAIT: "READ_BUFFER_INFO_WAIT",
+	BDR_CMD_RESET_BUFFER:          "RESET_BUFFER",
+}
+
+// Function to get the name of a command
+func GetIOCTLCommandName(cmd uintptr) string {
+	if name, ok := ioctlCmdNames[cmd]; ok {
+		return name
+	}
+	return fmt.Sprintf("Unknown command (0x%X)", cmd)
+}
 
 // ioctl wrapper function
 func ioctl(fd, request, arg uintptr) error {

@@ -47,6 +47,7 @@ type Client struct {
 	CharDevFile       *os.File               // Path to character device which is used for communication with kernel
 	Buf               []byte                 // Shared buffer between kernel and userspace where writes will be saved
 	MonitorPauseContr *pause.PauseController // used to pause monitor changes function
+	TermChan          chan struct{}          // Add termination channel
 }
 
 var (
@@ -91,7 +92,30 @@ func (b BufferInfo) HasNewWrites() bool {
 }
 
 func (c *Client) executeIOCTL(cmd uintptr, arg uintptr) error {
-	return ioctl(c.CharDevFile.Fd(), cmd, arg)
+	err := ioctl(c.CharDevFile.Fd(), cmd, arg)
+	if err != nil {
+		cmdName := GetIOCTLCommandName(cmd)
+		return fmt.Errorf("%s (0x%X) failed: %v", cmdName, cmd, err)
+	}
+	return nil
+}
+
+func (c *Client) serveIOCTL(pauseController *pause.PauseController, cmd uintptr, arg uintptr) {
+	for {
+		err := c.executeIOCTL(cmd, arg)
+		if err != nil {
+			if terminated := pauseController.WaitIfPaused(c.TermChan); terminated {
+				c.VerbosePrintln("Terminating attepmt for successfull ioctls...")
+				return
+			}
+
+			c.VerbosePrintln("IOCTL serveIOCTL failed:", err)
+			time.Sleep(RetryInterval * time.Second)
+			continue
+		}
+
+		break
+	}
 }
 
 func NewClient(cfg *Config) (*Client, error) {
@@ -145,6 +169,7 @@ func NewClient(cfg *Config) (*Client, error) {
 		CharDevFile:       charDevFd,
 		Buf:               buf,
 		MonitorPauseContr: monitorPauseContr,
+		TermChan:          make(chan struct{}),
 	}, nil
 }
 
@@ -163,53 +188,26 @@ func (c *Client) Close() {
 	}
 }
 
-func (c *Client) PerformCheckedReplication(termChan <-chan struct{}) {
+func (c *Client) PerformCheckedReplication() {
 	// TODO: reset the buffer
 
 	// the super duper fast function
 }
 
-func (c *Client) ResetBuffer(termChan <-chan struct{}) bool {
-	c.VerbosePrintln("Resetting buffer...")
-	/*
-		for {
-			err := c.executeIOCTL(BDR_CMD_RESET_BUFFER, 0)
-			if err != nil {
-				if terminated := pauseController.WaitIfPaused(termChan); terminated {
-					c.VerbosePrintln("Stopping change monitoring due to shutdown.")
-					return true
-				}
-
-				c.VerbosePrintln("IOCTL reset buffer failed:", err)
-				time.Sleep(RetryInterval * time.Second)
-				continue
-			}
-
-			return false
-		}*/
-	return false
-}
-
-func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
+func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 	defer wg.Done()
 	// reader := bytes.NewReader(nil)
-	pauseController := c.MonitorPauseContr
 
 	for {
 		// check if there was a termination signal or pause signal sent
-		if terminated := pauseController.WaitIfPaused(termChan); terminated {
+		if terminated := c.MonitorPauseContr.WaitIfPaused(c.TermChan); terminated {
 			c.VerbosePrintln("Stopping change monitoring due to shutdown.")
 			return
 		}
 
 		// using ioctl to get information from my character device assotiated to my device mapper target
 		var bufferInfo BufferInfo
-		err := c.executeIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
-		if err != nil {
-			c.VerbosePrintln("IOCTL read buffer info failed:", err)
-			time.Sleep(RetryInterval * time.Second)
-			continue
-		}
+		c.serveIOCTL(c.MonitorPauseContr, BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 
 		// check if new write infomation can be found within the buffer, if not we'll wait and try again
 		newWrites := bufferInfo.HasNewWrites()
@@ -226,18 +224,12 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 
 			// we need to check what parts of the disk are inconsistent, first we need to make sure there is no work being done on the disk, because while we scan the buffer might oveflow again
 			for {
-				if terminated := pauseController.WaitIfPaused(termChan); terminated {
+				if terminated := c.MonitorPauseContr.WaitIfPaused(c.TermChan); terminated {
 					c.VerbosePrintln("Stopping change monitoring due to shutdown.")
 					return
 				}
 
-				err := c.executeIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
-				if err != nil {
-					c.VerbosePrintln("IOCTL read buffer info failed:", err)
-					// ioctl failed for some reason, trying indefinitelly, until the problem is fixed
-					time.Sleep(RetryInterval * time.Second)
-					continue
-				}
+				c.serveIOCTL(c.MonitorPauseContr, BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 
 				newWrites = bufferInfo.HasNewWrites()
 				if newWrites {
@@ -249,11 +241,9 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 				break
 			}
 
-			c.PerformCheckedReplication(termChan)
+			c.PerformCheckedReplication()
 
-			if c.ResetBuffer(termChan) {
-				return
-			}
+			c.serveIOCTL(c.MonitorPauseContr, BDR_CMD_RESET_BUFFER, uintptr(unsafe.Pointer(&bufferInfo)))
 
 			continue
 		}
@@ -264,23 +254,22 @@ func (c *Client) MonitorChanges(termChan <-chan struct{}, wg *sync.WaitGroup) {
 }
 
 func (c *Client) Run() {
-	termChan := make(chan struct{})
 	signalChan := make(chan os.Signal, 1)
 
 	c.Println("Starting bdr client daemon...")
 
 	var termWg sync.WaitGroup
-	termWg.Add(1) // Indicate we're starting one goroutine
-	go c.MonitorChanges(termChan, &termWg)
+	termWg.Add(1)
+	go c.MonitorChanges(&termWg) // No need to pass termChan
 
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
-	<-signalChan // Block until signal received
+	<-signalChan
 
 	c.Println("Interrupt signal received. Shutting down...")
-	close(termChan) // Signal monitor to stop
-	termWg.Wait()   // Wait for monitor to finish
-	c.Close()       // Clean up
+	close(c.TermChan) // Use the client's TermChan
+	termWg.Wait()
+	c.Close()
 
 	c.Println("bdr client daemon terminated successfully.")
 }
