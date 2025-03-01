@@ -59,6 +59,10 @@ const (
 	RetryInterval = 1   // seconds
 )
 
+func RetrySleep() {
+	time.Sleep(RetryInterval * time.Second)
+}
+
 func (c *Client) Println(args ...interface{}) {
 	c.Config.Println(args...)
 }
@@ -91,6 +95,17 @@ func (b BufferInfo) HasNewWrites() bool {
 	return b.Length != 0
 }
 
+func (c *Client) CheckTermination() bool {
+	for {
+		select {
+		case <-c.TermChan:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
 func (c *Client) executeIOCTL(cmd uintptr, arg uintptr) error {
 	err := ioctl(c.CharDevFile.Fd(), cmd, arg)
 	if err != nil {
@@ -100,22 +115,51 @@ func (c *Client) executeIOCTL(cmd uintptr, arg uintptr) error {
 	return nil
 }
 
-func (c *Client) serveIOCTL(pauseController *pause.PauseController, cmd uintptr, arg uintptr) {
+// wrapper around ioctl calls, tries indefinitely until the problem is fixed
+func (c *Client) serveIOCTL(cmd uintptr, arg uintptr) {
 	for {
 		err := c.executeIOCTL(cmd, arg)
 		if err != nil {
-			if terminated := pauseController.WaitIfPaused(c.TermChan); terminated {
+			if terminated := c.CheckTermination(); terminated {
 				c.VerbosePrintln("Terminating attepmt for successfull ioctls...")
 				return
 			}
 
-			c.VerbosePrintln("IOCTL serveIOCTL failed:", err)
-			time.Sleep(RetryInterval * time.Second)
+			c.VerbosePrintln("serveIOCTL failed: ", err)
+			RetrySleep()
 			continue
 		}
 
 		break
 	}
+}
+
+func (c *Client) SendPacket(packet *networking.Packet) {
+	for {
+		err := c.Encoder.Encode(packet)
+		if err != nil {
+			if terminated := c.CheckTermination(); terminated {
+				c.VerbosePrintln("Terminating attepmt for successfull packet send...")
+				return
+			}
+
+			c.VerbosePrintln("SendPacket failed: ", err)
+			RetrySleep()
+			continue
+		}
+
+		break
+	}
+}
+
+func (c *Client) ResetBufferIOCTL() {
+	c.DebugPrintln("Reseting kernel buffer...")
+	c.serveIOCTL(BDR_CMD_RESET_BUFFER, 0)
+}
+
+func (c *Client) ReadBufferIOCTL(pauseController *pause.PauseController, arg uintptr) {
+	c.DebugPrintln("Getting information from buffer...")
+	c.serveIOCTL(BDR_CMD_READ_BUFFER_INFO, arg)
 }
 
 func NewClient(cfg *Config) (*Client, error) {
@@ -188,10 +232,16 @@ func (c *Client) Close() {
 	}
 }
 
-func (c *Client) PerformCheckedReplication() {
-	// TODO: reset the buffer
+func (c *Client) InitiateCheckedReplication() {
+	// reset the buffer since the data will still be replicated
+	c.ResetBufferIOCTL()
 
-	// the super duper fast function
+	c.MonitorPauseContr.Pause()
+
+	packet := networking.Packet{
+		PacketType: networking.PacketTypeCmdGetHashes,
+		Payload: nil,
+	}
 }
 
 func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
@@ -207,7 +257,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 
 		// using ioctl to get information from my character device assotiated to my device mapper target
 		var bufferInfo BufferInfo
-		c.serveIOCTL(c.MonitorPauseContr, BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+		c.serveIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 
 		// check if new write infomation can be found within the buffer, if not we'll wait and try again
 		newWrites := bufferInfo.HasNewWrites()
@@ -229,21 +279,19 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 					return
 				}
 
-				c.serveIOCTL(c.MonitorPauseContr, BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+				c.serveIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 
 				newWrites = bufferInfo.HasNewWrites()
 				if newWrites {
 					// if new writes are present, there is no point starting replication of the disk, since
-					time.Sleep(RetryInterval * time.Second)
+					RetrySleep()
 					continue
 				}
 
 				break
 			}
 
-			c.PerformCheckedReplication()
-
-			c.serveIOCTL(c.MonitorPauseContr, BDR_CMD_RESET_BUFFER, uintptr(unsafe.Pointer(&bufferInfo)))
+			c.InitiateCheckedReplication()
 
 			continue
 		}
