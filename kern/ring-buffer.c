@@ -195,10 +195,11 @@ int bdr_ring_buffer_put(struct bdr_ring_buffer *rb, unsigned int sector, unsigne
 	bdr_ring_buffer_update_unsafe(rb);
 	spin_unlock(&rb->lock);
 
-	
 	/* Calculate buffer offset and wrap around as needed */
 	buffer_offset = (buffer_info.offset + buffer_info.length) % rb->buffer_info.max_writes;
 	buffer_offset *= BDR_WRITE_INFO_SIZE;
+
+	pr_info("offset: %lu", buffer_offset);
 
 	/* Prepare target location in the ring buffer */
 	target_slot = (struct bdr_write_info *)(rb->buffer + buffer_offset);

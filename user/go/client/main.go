@@ -4,8 +4,11 @@ import (
 	"bdr/networking"
 	"bdr/pause"
 	"bdr/utils"
+	"bytes"
+	"encoding/binary"
 	"encoding/gob"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -106,6 +109,11 @@ func (c *Client) CheckTermination() bool {
 	}
 }
 
+func (c *Client) GetBufferInfoByteOffset(bufferInfo *BufferInfo, off uint64) uint64 {
+	offset := ((bufferInfo.Offset + off) % bufferInfo.MaxWrites) * uint64(c.TargetInfo.WriteInfoSize)
+	return offset
+}
+
 func (c *Client) executeIOCTL(cmd uintptr, arg uintptr) error {
 	err := ioctl(c.CharDevFile.Fd(), cmd, arg)
 	if err != nil {
@@ -134,7 +142,7 @@ func (c *Client) serveIOCTL(cmd uintptr, arg uintptr) {
 	}
 }
 
-func (c *Client) SendPacket(packet *networking.Packet) {
+func (c *Client) sendPacket(packet *networking.Packet) {
 	for {
 		err := c.Encoder.Encode(packet)
 		if err != nil {
@@ -157,7 +165,7 @@ func (c *Client) ResetBufferIOCTL() {
 	c.serveIOCTL(BDR_CMD_RESET_BUFFER, 0)
 }
 
-func (c *Client) ReadBufferIOCTL(pauseController *pause.PauseController, arg uintptr) {
+func (c *Client) ReadBufferIOCTL(arg uintptr) {
 	c.DebugPrintln("Getting information from buffer...")
 	c.serveIOCTL(BDR_CMD_READ_BUFFER_INFO, arg)
 }
@@ -206,6 +214,7 @@ func NewClient(cfg *Config) (*Client, error) {
 
 	return &Client{
 		Config:            cfg,
+		TargetInfo:        &targetInfo,
 		Conn:              conn,
 		Encoder:           encoder,
 		Decoder:           decoder,
@@ -240,13 +249,79 @@ func (c *Client) InitiateCheckedReplication() {
 
 	packet := networking.Packet{
 		PacketType: networking.PacketTypeCmdGetHashes,
-		Payload: nil,
+		Payload:    nil,
+	}
+
+	c.sendPacket(&packet)
+}
+
+func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
+	bufferInfo.Print()
+	for i := uint64(0); i < bufferInfo.Length; i++ {
+		for {
+			bufBegin := c.GetBufferInfoByteOffset(bufferInfo, i)
+			bufEnd := bufBegin + uint64(c.TargetInfo.WriteInfoSize)
+			data := c.Buf[bufBegin:bufEnd]
+
+			fmt.Println("Begin, end: ", bufBegin, bufEnd)
+
+			reader := bytes.NewReader(data)
+
+			var writeInfoPacket networking.WriteInfo
+			var err error
+
+			// Read Sector
+			if err = binary.Read(reader, binary.LittleEndian, &writeInfoPacket.Sector); err != nil {
+				if terminated := c.CheckTermination(); terminated {
+					c.VerbosePrintln("Terminating attempt to process buffer info...")
+					return
+				}
+				c.VerbosePrintln("Failed to read Sector: ", err)
+				RetrySleep()
+				continue
+			}
+
+			// Read Size
+			if err = binary.Read(reader, binary.LittleEndian, &writeInfoPacket.Size); err != nil {
+				if terminated := c.CheckTermination(); terminated {
+					c.VerbosePrintln("Terminating attempt to process buffer info...")
+					return
+				}
+				c.VerbosePrintln("Failed to read Size: ", err)
+				RetrySleep()
+				continue
+			}
+
+			// Read Data
+			writeInfoPacket.Data = make([]byte, c.TargetInfo.PageSize)
+			if _, err = io.ReadFull(reader, writeInfoPacket.Data); err != nil {
+				if terminated := c.CheckTermination(); terminated {
+					c.VerbosePrintln("Terminating attempt to process buffer info...")
+					return
+				}
+				c.VerbosePrintln("Failed to read Data: ", err)
+				RetrySleep()
+				continue
+			}
+			
+			writeInfoPacket.Print()
+
+			// Now send the packet through the network
+			packet := networking.Packet{
+				PacketType: networking.PacketTypeWriteInfo,
+				Payload:    writeInfoPacket,
+			}
+
+			c.sendPacket(&packet)
+
+			// If we got here, we successfully processed this write info
+			break
+		}
 	}
 }
 
 func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 	defer wg.Done()
-	// reader := bytes.NewReader(nil)
 
 	for {
 		// check if there was a termination signal or pause signal sent
@@ -296,6 +371,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 			continue
 		}
 
+		c.ProcessBufferInfo(&bufferInfo)
 		fmt.Println("Some information found!!")
 		bufferInfo.Print()
 	}

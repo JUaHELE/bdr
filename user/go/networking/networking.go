@@ -2,6 +2,7 @@ package networking
 
 import (
 	"encoding/gob"
+	"fmt"
 )
 
 const (
@@ -11,19 +12,28 @@ const (
 )
 
 const (
-	PacketTypeCmdGetHashes = 0
+	PacketTypeCmdGetHashes = iota
+	PacketTypeWriteInfo
 )
 
-type WriteInfoPacket struct {
+type WriteInfo struct {
 	Sector uint32
 	Size   uint32
 	Data   []byte
 }
 
-type HashPacket struct {
+func (w WriteInfo) Print() {
+	fmt.Printf("WriteInfo { Sector: %d, Size: %d, Data:... }\n", w.Sector, w.Size)
+}
+
+type HashInfo struct {
 	Offset uint32
 	Size uint32
 	Data [HashSize]byte
+}
+
+func (h HashInfo) Print() {
+	fmt.Printf("HashInfo { Offset: %d, Size: %d, Data:... }\n", h.Offset, h.Size)
 }
 
 type Packet struct {
@@ -32,6 +42,6 @@ type Packet struct {
 }
 
 func RegisterGobPackets() {
-	gob.Register(WriteInfoPacket{})
-	gob.Register(HashPacket{})
+	gob.Register(WriteInfo{})
+	gob.Register(HashInfo{})
 }

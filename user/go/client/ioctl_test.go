@@ -184,7 +184,4 @@ func TestDeviceIoctls(t *testing.T) {
 			bufferInfo.Offset, bufferInfo.Length, bufferInfo.Last, bufferInfo.Flags, bufferInfo.MaxWrites)
 
 	})
-
-	// read buffer and reset buffer aren't suitable for testing, since it can break functionality
-	// also wait calls can wait indefinitelly
 }

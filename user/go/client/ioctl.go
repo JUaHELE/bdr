@@ -52,6 +52,7 @@ const (
 )
 
 type enum_t uint32
+type offset_t uint32
 
 // Device command definitions
 var (
@@ -67,6 +68,9 @@ var (
 	BDR_CMD_READ_BUFFER_INFO_WAIT = _IOR(BDR_MAGIC, 6, unsafe.Sizeof(BufferInfo{}))
 
 	BDR_CMD_RESET_BUFFER = _IO(BDR_MAGIC, 7)
+
+	offset_helper offset_t = 0
+	BDR_CMD_WRITE_TEST_VALUE = _IOW(BDR_MAGIC, 8, unsafe.Sizeof(offset_helper))
 )
 
 var ioctlCmdNames = map[uintptr]string{
@@ -77,6 +81,7 @@ var ioctlCmdNames = map[uintptr]string{
 	BDR_CMD_READ_BUFFER_INFO:      "READ_BUFFER_INFO",
 	BDR_CMD_READ_BUFFER_INFO_WAIT: "READ_BUFFER_INFO_WAIT",
 	BDR_CMD_RESET_BUFFER:          "RESET_BUFFER",
+	BDR_CMD_WRITE_TEST_VALUE:      "WRITE_TEST_VALUE",
 }
 
 // Function to get the name of a command

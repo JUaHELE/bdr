@@ -69,8 +69,8 @@ static int bdr_chardev_mmap(struct file *filp, struct vm_area_struct *vma)
 	unsigned long rb_size = bdr_ring_buffer_get_byte_size(&bc->ring_buf);
 
 	unsigned long mapped_size = vma->vm_end - vma->vm_start;
-	if (mapped_size > rb_size) {
-		pr_warn("Requested mmap size exceeds buffer size\n");
+	if (mapped_size < rb_size) {
+		pr_warn("Requested memory is not enough to cover the buffer\n");
 		mapped_size = rb_size;
 	}
 
@@ -80,15 +80,21 @@ static int bdr_chardev_mmap(struct file *filp, struct vm_area_struct *vma)
 	    return -EINVAL;
 	}
 
-	unsigned long pfn = vmalloc_to_pfn(target_buffer);
+	for (unsigned long offset = 0; offset < rb_size; offset += PAGE_SIZE) {
+		void *page_address = target_buffer + offset;
+		unsigned long pfn = vmalloc_to_pfn(page_address);
 
-	ret = remap_pfn_range(vma, vma->vm_start, pfn, mapped_size, vma->vm_page_prot);
+		ret = remap_pfn_range(vma,
+				      vma->vm_start + offset,
+				      pfn,
+				      PAGE_SIZE,
+				      vma->vm_page_prot);
 
-	if (ret) {
-		pr_err("Failed to mmap buffer\n");
-		return ret;
+		if (ret) {
+			pr_err("Failed to map page at offset %lu\n", offset);
+			return ret;
+		}
 	}
-
 	return 0;
 }
 
@@ -162,7 +168,22 @@ static long bdr_chardev_ioctl(struct file *filp, unsigned int cmd, unsigned long
 	case BDR_CMD_RESET_BUFFER:
 		bdr_ring_buffer_reset(rb);
 		break;
+	case BDR_CMD_WRITE_TEST_VALUE:
+		uint32_t offset;
+		if (copy_from_user(&offset, (void __user *)arg, sizeof(offset))) {
+		    ret = -EFAULT;
+		    break;
+		}
 
+		void *target_buffer = bdr_ring_buffer_get_buffer(&bc->ring_buf);
+		if (!target_buffer) {
+			pr_err("Failed to get buffer for test write\n");
+			ret = -EINVAL;
+			break;
+		}
+
+		((char *)target_buffer)[offset] = 0xAA;
+		break;
 	default:
 		pr_warn("Ioctl not recognized: cmd=%u\n", cmd);
 		ret = -ENOTTY;
@@ -339,13 +360,17 @@ static int bdr_target_map(struct dm_target *ti, struct bio *bio)
 {
 	struct bdr_context *bc = (struct bdr_context*)ti->private;
 
-	bool is_write = op_is_write(bio_op(bio));
-	bool buffer_overflow = bdr_ring_buffer_is_full(&bc->ring_buf);
+	bool is_write;
+	bool buffer_overflow;
+
+	is_write = op_is_write(bio_op(bio));
+	buffer_overflow = bdr_ring_buffer_is_full(&bc->ring_buf);
 
 	if(is_write && !buffer_overflow) {
 		bdr_submit_bio(&bc->ring_buf, bio);
 	}
 
+	/* change device to underlying */
 	bio_set_dev(bio, bc->dev->bdev);
 
 	/* calculates the new sector offset within the underlying device */
