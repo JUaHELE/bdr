@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 	"syscall"
+	"io"
 )
 
 type Server struct {
@@ -112,12 +113,32 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	defer s.CloseClientConn()
 	defer wg.Done()
 
+	s.Println("Accepted connection from", s.Conn.RemoteAddr())
+
 	for {
 		if s.CheckTermination() {
 			s.VerbosePrintln("Terminating client handler.")
 			return
 		}
 
+		packet := &networking.Packet{}
+		if err := s.Decoder.Decode(packet); err != nil {
+			if err == io.EOF {
+				s.Println("Connection closed by the client.")
+				return
+			}
+			s.VerbosePrintln("Failed to decode packet: %v", err)
+			continue
+		}
+
+		switch packet.PacketType {
+		case networking.PacketTypeCmdGetHashes:
+			s.DebugPrintln("Get hashes packet received.")
+		case networking.PacketTypeWriteInfo:
+			s.DebugPrintln("Write infomation packet received.")
+		default:
+			s.VerbosePrintln("Unknown packet received: %d", packet.PacketType)
+		}
 	}
 }
 
@@ -143,6 +164,7 @@ func (s *Server) HandleConnections(wg *sync.WaitGroup) {
 
 		s.ConnMutex.Lock()
 		if s.Connected {
+			conn.Close()
 			s.ConnMutex.Unlock()
 			time.Sleep(ReconnectDelay)
 			continue
@@ -157,6 +179,7 @@ func (s *Server) HandleConnections(wg *sync.WaitGroup) {
 
 		var clientWg sync.WaitGroup
 		clientWg.Add(1)
+
 		go s.HandleClient(&clientWg)
 		
 		clientWg.Wait()
