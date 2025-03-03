@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"time"
 	"syscall"
 )
 
@@ -156,7 +157,7 @@ func (s *Server) HandleConnections(wg *sync.WaitGroup) {
 
 		var clientWg sync.WaitGroup
 		clientWg.Add(1)
-		go s.HandleClient()
+		go s.HandleClient(&clientWg)
 		
 		clientWg.Wait()
 	}
@@ -177,7 +178,8 @@ func (s *Server) Run() {
 
 	s.Println("Interrupt signal received. Shutting down...")
 	close(s.TermChan) // Use the servers's TermChan
-	s.Conn.Close()    // close the connection to unblock accept
+
+	s.Listener.Close()    // close the connection to unblock accept
 	termWg.Wait()
 	s.Close()
 
