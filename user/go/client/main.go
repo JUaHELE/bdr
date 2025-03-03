@@ -366,19 +366,19 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 			continue
 		}
 
+		bufferInfo.Print()
 		c.ProcessBufferInfo(&bufferInfo)
 	}
 }
 
 func (c *Client) Run() {
-	signalChan := make(chan os.Signal, 1)
-
-	c.Println("Starting bdr client daemon...")
+	c.Println("Starting bdr client connected to", c.Config.IpAddress, "and port", c.Config.Port)
 
 	var termWg sync.WaitGroup
 	termWg.Add(1)
 	go c.MonitorChanges(&termWg) // No need to pass termChan
 
+	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
 	<-signalChan

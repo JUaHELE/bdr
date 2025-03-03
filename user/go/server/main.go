@@ -2,22 +2,54 @@
 
 package main
 
+import (
+	"bdr/networking"
+	"encoding/gob"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+)
+
 type Server struct {
-	Config        *Config
-	Listener net.Listener
-	Conn          net.Conn
-	Encoder       *gob.Encoder
-	Decoder       *gob.Decoder
-	TargetDevFd   *os.File
-	TermChan chan struct{}
+	Config      *Config
+	Listener    net.Listener
+	Conn        net.Conn
+	Encoder     *gob.Encoder
+	Decoder     *gob.Decoder
+	TargetDevFd *os.File
+	TermChan    chan struct{}
+	Connected   bool
+	ConnMutex   sync.Mutex
 }
+
+func (s *Server) Println(args ...interface{}) {
+	s.Config.Println(args...)
+}
+
+func (s *Server) VerbosePrintln(args ...interface{}) {
+	s.Config.VerbosePrintln(args...)
+}
+
+func (s *Server) DebugPrintln(args ...interface{}) {
+	s.Config.DebugPrintln(args...)
+}
+
+const (
+	ConnectionTimeout = 30 * time.Second
+	ReconnectDelay    = 5 * time.Second
+)
 
 func NewServer(cfg *Config) (*Server, error) {
 	targetDeviceFd, err := os.OpenFile(cfg.TargetDevPath, os.O_RDWR, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open device: %w", err)
 	}
-	
+
 	address := fmt.Sprintf("%s:%d", cfg.IpAddress, cfg.Port)
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
@@ -25,11 +57,30 @@ func NewServer(cfg *Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to listen on port %d: %w", cfg.Port, err)
 	}
 
-	
+	server := &Server{
+		Config:      cfg,
+		Listener:    listener,
+		TargetDevFd: targetDeviceFd,
+		TermChan:    make(chan struct{}),
+		Connected:   false,
+	}
 
+	return server, nil
+}
+
+func (s *Server) CheckTermination() bool {
+	select {
+	case <-s.TermChan:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) Close() {
+	s.ConnMutex.Lock()
+	defer s.ConnMutex.Unlock()
+
 	if s.Conn != nil {
 		s.Conn.Close()
 		s.Conn = nil
@@ -42,6 +93,96 @@ func (s *Server) Close() {
 	}
 }
 
+func (s *Server) CloseClientConn() {
+	s.ConnMutex.Lock()
+	defer s.ConnMutex.Unlock()
+
+	s.Connected = false
+	if s.Conn != nil {
+		s.Conn.Close()
+		s.Conn = nil
+	}
+
+	s.Encoder = nil
+	s.Decoder = nil
+}
+
+func (s *Server) HandleClient(wg *sync.WaitGroup) {
+	defer s.CloseClientConn()
+	defer wg.Done()
+
+	for {
+		if s.CheckTermination() {
+			s.VerbosePrintln("Terminating client handler.")
+			return
+		}
+
+	}
+}
+
+func (s *Server) HandleConnections(wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for {
+		if s.CheckTermination() {
+			s.VerbosePrintln("Terminating connection listener.")
+			return
+		}
+
+		conn, err := s.Listener.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				s.VerbosePrintln("Listener closed. Terminating...")
+				break
+			}
+
+			s.Println("Listener.Accept error:", err)
+			continue
+		}
+
+		s.ConnMutex.Lock()
+		if s.Connected {
+			s.ConnMutex.Unlock()
+			time.Sleep(ReconnectDelay)
+			continue
+		}
+
+		s.Conn = conn
+		s.Encoder = gob.NewEncoder(conn)
+		s.Decoder = gob.NewDecoder(conn)
+		s.Connected = true
+
+		s.ConnMutex.Unlock()
+
+		var clientWg sync.WaitGroup
+		clientWg.Add(1)
+		go s.HandleClient()
+		
+		clientWg.Wait()
+	}
+}
+
+func (s *Server) Run() {
+	s.Println("Starting bdr server listening on", s.Config.IpAddress, "and port", s.Config.Port)
+	s.VerbosePrintln("Target device:", s.Config.TargetDevPath)
+
+	var termWg sync.WaitGroup
+	termWg.Add(1)
+	go s.HandleConnections(&termWg)
+
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+	<-signalChan
+
+	s.Println("Interrupt signal received. Shutting down...")
+	close(s.TermChan) // Use the servers's TermChan
+	s.Conn.Close()    // close the connection to unblock accept
+	termWg.Wait()
+	s.Close()
+
+	s.Println("bdr server terminated successfully.")
+}
 
 func main() {
 	cfg := NewConfig()
@@ -59,5 +200,5 @@ func main() {
 
 	networking.RegisterGobPackets()
 
-	// server.Run()
+	server.Run()
 }
