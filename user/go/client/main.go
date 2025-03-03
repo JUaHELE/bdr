@@ -256,14 +256,11 @@ func (c *Client) InitiateCheckedReplication() {
 }
 
 func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
-	bufferInfo.Print()
 	for i := uint64(0); i < bufferInfo.Length; i++ {
 		for {
 			bufBegin := c.GetBufferInfoByteOffset(bufferInfo, i)
 			bufEnd := bufBegin + uint64(c.TargetInfo.WriteInfoSize)
 			data := c.Buf[bufBegin:bufEnd]
-
-			fmt.Println("Begin, end: ", bufBegin, bufEnd)
 
 			reader := bytes.NewReader(data)
 
@@ -304,8 +301,6 @@ func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 				continue
 			}
 			
-			writeInfoPacket.Print()
-
 			// Now send the packet through the network
 			packet := networking.Packet{
 				PacketType: networking.PacketTypeWriteInfo,
@@ -372,8 +367,6 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 		}
 
 		c.ProcessBufferInfo(&bufferInfo)
-		fmt.Println("Some information found!!")
-		bufferInfo.Print()
 	}
 }
 
