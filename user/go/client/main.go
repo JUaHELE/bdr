@@ -137,7 +137,6 @@ func (c *Client) serveIOCTL(cmd uintptr, arg uintptr) {
 			RetrySleep()
 			continue
 		}
-
 		break
 	}
 }
@@ -155,9 +154,36 @@ func (c *Client) sendPacket(packet *networking.Packet) {
 			RetrySleep()
 			continue
 		}
-
 		break
 	}
+}
+
+func SendInitPacket(device string, encoder *gob.Encoder) error {
+	sectorSize, err := utils.GetSectorSize(device);
+	if err != nil {
+		return err
+	}
+
+	deviceSize, err := utils.GetDeviceSize(device);
+	if err != nil {
+		return err
+	}
+
+	initPacket := networking.InitInfo{
+		SectorSize: sectorSize,
+		DeviceSize: deviceSize,
+	}
+
+	packet := networking.Packet{
+		PacketType: networking.PacketTypeInit,
+		Payload: initPacket,
+	}
+
+	if err := encoder.Encode(packet); err != nil {
+		return fmt.Errorf("SendInitPacket failed: %w", err)
+	}
+
+	return nil
 }
 
 func (c *Client) ResetBufferIOCTL() {
@@ -210,6 +236,10 @@ func NewClient(cfg *Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to open target device: %w", err)
 	}
 
+	if err := SendInitPacket(cfg.UnderDevicePath, encoder); err != nil {
+		return nil, fmt.Errorf("failed to sent init packet: %w", err)
+	}
+
 	monitorPauseContr := pause.NewPauseController()
 
 	return &Client{
@@ -240,6 +270,8 @@ func (c *Client) Close() {
 		syscall.Munmap(c.Buf)
 	}
 }
+
+
 
 func (c *Client) InitiateCheckedReplication() {
 	// reset the buffer since the data will still be replicated
@@ -300,7 +332,7 @@ func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 				RetrySleep()
 				continue
 			}
-			
+
 			// Now send the packet through the network
 			packet := networking.Packet{
 				PacketType: networking.PacketTypeWriteInfo,
@@ -399,14 +431,15 @@ func main() {
 		log.Fatalf("Invalid arguments: %v", err)
 	}
 
+	// register needed packets
+	networking.RegisterGobPackets()
+
 	client, err := NewClient(cfg)
 	if err != nil {
 		log.Fatalf("Failed to initiate sender: %v", err)
 	}
 	defer client.Close()
 
-	// register needed packets
-	networking.RegisterGobPackets()
 
 	client.Run()
 }

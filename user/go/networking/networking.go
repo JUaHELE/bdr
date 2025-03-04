@@ -14,7 +14,17 @@ const (
 const (
 	PacketTypeCmdGetHashes = iota
 	PacketTypeWriteInfo
+	PacketTypeInit
 )
+
+type InitInfo struct {
+	SectorSize uint32
+	DeviceSize uint64
+}
+
+func (i InitInfo) Print() {
+	fmt.Printf("InitInfo { SectorSize: %d, DiskSize: %d }\n", i.SectorSize, i.DeviceSize)
+}
 
 type WriteInfo struct {
 	Sector uint32
@@ -44,4 +54,5 @@ type Packet struct {
 func RegisterGobPackets() {
 	gob.Register(WriteInfo{})
 	gob.Register(HashInfo{})
+	gob.Register(InitInfo{})
 }

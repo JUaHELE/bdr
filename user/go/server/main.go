@@ -20,6 +20,7 @@ import (
 type Server struct {
 	Config      *Config
 	Listener    net.Listener
+	ClientInfo *networking.InitInfo
 	Conn        net.Conn
 	Encoder     *gob.Encoder
 	Decoder     *gob.Decoder
@@ -109,11 +110,43 @@ func (s *Server) CloseClientConn() {
 	s.Decoder = nil
 }
 
+func (s *Server) handleWriteInfoPacket(packet *networking.Packet) error {
+	return nil
+}
+
+func (s *Server) WaitForInitInfo() error {
+	packet := &networking.Packet{}
+	if err := s.Decoder.Decode(packet); err != nil {
+		if err == io.EOF {
+			return fmt.Errorf("Connection closed by the client.")
+		}
+		return fmt.Errorf("Failed to decode packet: %v", err)
+	}
+
+	if packet.PacketType != networking.PacketTypeInit {
+		return fmt.Errorf("Expected init packet, got: %d", packet.PacketType)
+	}
+
+	initInfo, ok := packet.Payload.(networking.InitInfo)
+	if !ok {
+		return fmt.Errorf("invalid payload type for init packet")
+	}
+
+	s.ClientInfo = &initInfo
+	s.VerbosePrintln("Init info received...")
+
+	return nil
+}
+
 func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	defer s.CloseClientConn()
 	defer wg.Done()
 
 	s.Println("Accepted connection from", s.Conn.RemoteAddr())
+
+	if err := s.WaitForInitInfo(); err != nil {
+		s.Println("Error occured while waiting on init packet:", err)
+	}
 
 	for {
 		if s.CheckTermination() {
@@ -136,6 +169,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			s.DebugPrintln("Get hashes packet received.")
 		case networking.PacketTypeWriteInfo:
 			s.DebugPrintln("Write infomation packet received.")
+			s.handleWriteInfoPacket(packet)
 		default:
 			s.VerbosePrintln("Unknown packet received: %d", packet.PacketType)
 		}
@@ -181,8 +215,9 @@ func (s *Server) HandleConnections(wg *sync.WaitGroup) {
 		clientWg.Add(1)
 
 		go s.HandleClient(&clientWg)
-		
 		clientWg.Wait()
+
+		s.VerbosePrintln("Client disconnected.")
 	}
 }
 

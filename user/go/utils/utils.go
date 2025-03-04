@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"syscall"
+	"unsafe"
 )
 
 func Bit(nr uint) uint32 { return 1 << nr }
@@ -33,6 +35,49 @@ func AssertInRange(t *testing.T, value, min, max uint64, name string) {
 	if value < min || value > max {
 		t.Errorf("%s (%d) not in range [%d, %d]", name, value, min, max)
 	}
+}
+
+const BLKSSZGET = 0x1268
+
+
+func GetSectorSize(device string) (uint32, error) {
+	// Open the device file
+	file, err := os.Open(device)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	// Prepare variable to store sector size
+	var sectorSize uint32
+
+	// Call ioctl
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, file.Fd(), BLKSSZGET, uintptr(unsafe.Pointer(&sectorSize)))
+	if errno != 0 {
+		return 0, fmt.Errorf("ioctl failed: %v", errno)
+	}
+
+	return sectorSize, nil
+}
+
+
+const BLKGETSIZE64 = 0x80081272
+
+func GetDeviceSize(device string) (uint64, error) {
+	file, err := os.Open(device)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	var size uint64
+
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, file.Fd(), BLKGETSIZE64, uintptr(unsafe.Pointer(&size)))
+	if errno != 0 {
+		return 0, fmt.Errorf("ioctl failed: %v", errno)
+	}
+
+	return size, nil
 }
 
 func HexDump(data []byte) {
