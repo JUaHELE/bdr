@@ -202,7 +202,7 @@ func (c *Client) receivePacket(packet *networking.Packet) {
 				return
 			}
 
-			c.VerbosePrintln("SendPacket failed: ", err)
+			c.VerbosePrintln("receivePacket failed: ", err)
 			RetrySleep()
 			continue
 		}
@@ -457,13 +457,14 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
+		packet := &networking.Packet{}
+		c.receivePacket(packet)
+
 		if c.CheckTermination() {
 			c.VerbosePrintln("Terminating packet listener.")
 			return
 		}
 
-		packet := &networking.Packet{}
-		c.receivePacket(packet)
 
 		switch packet.PacketType {
 		case networking.PacketTypeErrInit:
@@ -489,9 +490,9 @@ func (c *Client) Run() {
 
 	<-signalChan
 
-	c.CloseClientConn()
 	c.Println("Interrupt signal received. Shutting down...")
 	close(c.TermChan)
+	c.CloseClientConn()
 	termWg.Wait()
 
 	c.CloseResources()

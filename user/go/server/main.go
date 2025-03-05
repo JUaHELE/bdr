@@ -4,6 +4,7 @@ package main
 
 import (
 	"bdr/networking"
+	"bdr/utils"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -100,6 +101,7 @@ func (s *Server) CloseClientConn() {
 	s.ConnMutex.Lock()
 	defer s.ConnMutex.Unlock()
 
+
 	s.Connected = false
 	if s.Conn != nil {
 		s.Conn.Close()
@@ -139,6 +141,24 @@ func (s *Server) WaitForInitInfo() error {
 	return nil
 }
 
+func (s *Server) CheckValidSizes() {
+	deviceSize, err := utils.GetDeviceSize(s.Config.TargetDevPath)
+	if err != nil || deviceSize != s.ClientInfo.DeviceSize{
+		errPacket := networking.Packet{
+			PacketType: networking.PacketTypeErrInit,
+			Payload: nil,
+		}
+
+		err := s.Encoder.Encode(errPacket)
+		if err != nil {
+			s.VerbosePrintln("Error when sending errInit packet")
+		}
+		s.Println("WARNING: Client has different size of the block device!")
+	} else {
+		s.VerbosePrintln("Client is acceptable.")
+	}
+}
+
 func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	defer s.CloseClientConn()
 	defer wg.Done()
@@ -150,7 +170,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		return
 	}
 
-	// TODO: here check validity of device sizes
+	s.CheckValidSizes()
 
 	for {
 		if s.CheckTermination() {
@@ -241,7 +261,7 @@ func (s *Server) Run() {
 	s.Println("Interrupt signal received. Shutting down...")
 	close(s.TermChan) // Use the servers's TermChan
 
-	s.CloseClientConn()  // close the connection to unblock accept
+	s.Listener.Close()
 	termWg.Wait()
 	s.Close()
 
