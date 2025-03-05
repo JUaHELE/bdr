@@ -465,7 +465,6 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 			return
 		}
 
-
 		switch packet.PacketType {
 		case networking.PacketTypeErrInit:
 			c.Println("WARNING: Remote and local devices do not have the same size.")

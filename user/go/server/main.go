@@ -112,9 +112,22 @@ func (s *Server) CloseClientConn() {
 	s.Decoder = nil
 }
 
-func (s *Server) handleWriteInfoPacket(packet *networking.Packet) error {
-	// TODO:
-	return nil
+func (s *Server) handleWriteInfoPacket(packet *networking.Packet) {
+	writeInfo, ok := packet.Payload.(networking.WriteInfo)
+	if !ok {
+		s.VerbosePrintln("invalid payload type for WriteInfo")
+	}
+
+	writeOffset := writeInfo.Sector * s.ClientInfo.SectorSize
+	dataToWrite := writeInfo.Data[:writeInfo.Size]
+
+	if _, err := s.TargetDevFd.Seek(int64(writeOffset), io.SeekStart); err != nil {
+		s.VerbosePrintln("Failed to seek in device:", err)
+	}
+
+	if _, err := s.TargetDevFd.Write(dataToWrite); err != nil {
+		s.VerbosePrintln("Failed to write data to device:", err)
+	}
 }
 
 func (s *Server) WaitForInitInfo() error {
