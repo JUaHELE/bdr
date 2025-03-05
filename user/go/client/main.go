@@ -141,6 +141,41 @@ func (c *Client) serveIOCTL(cmd uintptr, arg uintptr) {
 	}
 }
 
+func (c *Client) reconnectToServer() {
+	c.VerbosePrintln("Trying to reconnect to the server.")
+
+	if c.Conn != nil {
+		c.Conn.Close()
+	}
+
+	address := fmt.Sprintf("%s:%d", c.Config.IpAddress, c.Config.Port)
+
+	for {
+		if terminated := c.CheckTermination(); terminated {
+			c.VerbosePrintln("Terminating attepmt for reconnect...")
+			return
+		}
+
+		conn, err := net.DialTimeout("tcp", address, 10*time.Second)
+		if err == nil {
+			c.Conn = conn
+			c.Encoder = gob.NewEncoder(conn)
+			c.Decoder = gob.NewDecoder(conn)
+
+			// Resend initialization packet
+			if err := c.SendInitPacket(c.Config.UnderDevicePath); err != nil {
+				c.Println("Failed to resend init packet during reconnection")
+				continue
+			}
+
+			c.Println("Successfully reconnected to server")
+			return
+		}
+
+		c.VerbosePrintln("Attempt for reconnection failed. Trying again...")
+	}
+}
+
 func (c *Client) sendPacket(packet *networking.Packet) {
 	for {
 		err := c.Encoder.Encode(packet)
@@ -158,7 +193,24 @@ func (c *Client) sendPacket(packet *networking.Packet) {
 	}
 }
 
-func SendInitPacket(device string, encoder *gob.Encoder) error {
+func (c *Client) receivePacket(packet *networking.Packet) {
+	for {
+		err := c.Decoder.Decode(packet)
+		if err != nil {
+			if terminated := c.CheckTermination(); terminated {
+				c.VerbosePrintln("Terminating attepmt for successfull packet send...")
+				return
+			}
+
+			c.VerbosePrintln("SendPacket failed: ", err)
+			RetrySleep()
+			continue
+		}
+		break
+	}
+}
+
+func (c *Client) SendInitPacket(device string) error {
 	sectorSize, err := utils.GetSectorSize(device);
 	if err != nil {
 		return err
@@ -179,9 +231,7 @@ func SendInitPacket(device string, encoder *gob.Encoder) error {
 		Payload: initPacket,
 	}
 
-	if err := encoder.Encode(packet); err != nil {
-		return fmt.Errorf("SendInitPacket failed: %w", err)
-	}
+	c.sendPacket(&packet)
 
 	return nil
 }
@@ -236,9 +286,6 @@ func NewClient(cfg *Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to open target device: %w", err)
 	}
 
-	if err := SendInitPacket(cfg.UnderDevicePath, encoder); err != nil {
-		return nil, fmt.Errorf("failed to sent init packet: %w", err)
-	}
 
 	monitorPauseContr := pause.NewPauseController()
 
@@ -256,10 +303,13 @@ func NewClient(cfg *Config) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) Close() {
+func (c *Client) CloseClientConn() {
 	if c.Conn != nil {
 		c.Conn.Close()
 	}
+}
+
+func (c *Client) CloseResources() {
 	if c.UnderDevFile != nil {
 		c.UnderDevFile.Close()
 	}
@@ -403,23 +453,48 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 	}
 }
 
+func (c *Client) ListenPackets(wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for {
+		if c.CheckTermination() {
+			c.VerbosePrintln("Terminating packet listener.")
+			return
+		}
+
+		packet := &networking.Packet{}
+		c.receivePacket(packet)
+
+		switch packet.PacketType {
+		case networking.PacketTypeErrInit:
+			c.Println("WARNING: Remote and local devices do not have the same size.")
+		default:
+			c.VerbosePrintln("Unknown packet received:", packet.PacketType)
+		}
+	}
+}
+
 func (c *Client) Run() {
 	c.Println("Starting bdr client connected to", c.Config.IpAddress, "and port", c.Config.Port)
 
 	var termWg sync.WaitGroup
 	termWg.Add(1)
-	go c.MonitorChanges(&termWg) // No need to pass termChan
+	go c.MonitorChanges(&termWg)
+
+	termWg.Add(1)
+	go c.ListenPackets(&termWg)
 
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
 	<-signalChan
 
+	c.CloseClientConn()
 	c.Println("Interrupt signal received. Shutting down...")
-	close(c.TermChan) // Use the client's TermChan
+	close(c.TermChan)
 	termWg.Wait()
-	c.Close()
 
+	c.CloseResources()
 	c.Println("bdr client daemon terminated successfully.")
 }
 
@@ -438,8 +513,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initiate sender: %v", err)
 	}
-	defer client.Close()
 
+	if err := client.SendInitPacket(cfg.UnderDevicePath); err != nil {
+		log.Fatalf("failed to sent init packet: %w", err)
+	}
 
 	client.Run()
 }

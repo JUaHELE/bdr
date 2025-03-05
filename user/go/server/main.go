@@ -111,6 +111,7 @@ func (s *Server) CloseClientConn() {
 }
 
 func (s *Server) handleWriteInfoPacket(packet *networking.Packet) error {
+	// TODO:
 	return nil
 }
 
@@ -146,7 +147,10 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 
 	if err := s.WaitForInitInfo(); err != nil {
 		s.Println("Error occured while waiting on init packet:", err)
+		return
 	}
+
+	// TODO: here check validity of device sizes
 
 	for {
 		if s.CheckTermination() {
@@ -160,7 +164,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 				s.Println("Connection closed by the client.")
 				return
 			}
-			s.VerbosePrintln("Failed to decode packet: %v", err)
+			s.VerbosePrintln("Failed to decode packet:", err)
 			continue
 		}
 
@@ -171,7 +175,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			s.DebugPrintln("Write infomation packet received.")
 			s.handleWriteInfoPacket(packet)
 		default:
-			s.VerbosePrintln("Unknown packet received: %d", packet.PacketType)
+			s.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}
 	}
 }
@@ -237,7 +241,7 @@ func (s *Server) Run() {
 	s.Println("Interrupt signal received. Shutting down...")
 	close(s.TermChan) // Use the servers's TermChan
 
-	s.Listener.Close()    // close the connection to unblock accept
+	s.CloseClientConn()  // close the connection to unblock accept
 	termWg.Wait()
 	s.Close()
 

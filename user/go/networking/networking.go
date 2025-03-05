@@ -15,6 +15,7 @@ const (
 	PacketTypeCmdGetHashes = iota
 	PacketTypeWriteInfo
 	PacketTypeInit
+	PacketTypeErrInit
 )
 
 type InitInfo struct {
