@@ -7,8 +7,8 @@ import (
 
 const (
 	HashedBlockSize = 1 // megabytes
-	HashedSpace = 1024 * 1024 * HashedBlockSize
-	HashSize = 32 // size of hash in bytes
+	HashedSpaceBase = 1024 * 1024 * HashedBlockSize
+	HashSizeSha256 = 32 // size of hash in bytes
 )
 
 const (
@@ -16,6 +16,8 @@ const (
 	PacketTypeWriteInfo
 	PacketTypeInit
 	PacketTypeErrInit
+	PacketTypeSha256
+	PacketTypeInfoHashingCompleted
 )
 
 type InitInfo struct {
@@ -33,14 +35,14 @@ type WriteInfo struct {
 	Data   []byte
 }
 
-func (w WriteInfo) Print() {
-	fmt.Printf("WriteInfo { Sector: %d, Size: %d, Data:... }\n", w.Sector, w.Size)
+type HashInfo struct {
+	Offset uint64
+	Size uint32
+	Hash []byte
 }
 
-type HashInfo struct {
-	Offset uint32
-	Size uint32
-	Data [HashSize]byte
+func (w WriteInfo) Print() {
+	fmt.Printf("WriteInfo { Sector: %d, Size: %d, Data:... }\n", w.Sector, w.Size)
 }
 
 func (h HashInfo) Print() {

@@ -16,6 +16,7 @@ import (
 	"time"
 	"syscall"
 	"io"
+	simdsha256 "github.com/minio/sha256-simd"
 )
 
 type Server struct {
@@ -72,6 +73,65 @@ func NewServer(cfg *Config) (*Server, error) {
 	return server, nil
 }
 
+func (s *Server) CompleteHashing() {
+	packet := &networking.Packet{
+		PacketType: networking.PacketTypeInfoHashingCompleted,
+		Payload: nil,
+	}
+
+	err := s.Encoder.Encode(packet)
+	if err != nil {
+		s.VerbosePrintln("Error while sending complete hashing info:", err)
+		return
+	}
+
+	s.VerbosePrintln("Hashing completed.")
+}
+
+func (s *Server) HashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
+	s.VerbosePrintln("Hashing disk...")
+
+	buf := make([]byte, networking.HashSizeSha256)
+
+	readOffset := uint64(0)
+
+	for {
+		n, err := s.TargetDevFd.ReadAt(buf, int64(readOffset))
+		if err != nil && err != io.EOF {
+			s.VerbosePrintln("Error while hashing dish:", err)
+		}
+
+		if n == 0 {
+			break
+		}
+
+		shaWriter := simdsha256.New()
+		shaWriter.Write(buf)
+
+		hash := shaWriter.Sum(nil)
+
+		hashInfo := networking.HashInfo{
+			Offset: readOffset,
+			Size: uint32(networking.HashedSpaceBase),
+			Hash: hash,
+		}
+
+		hashPacket := networking.Packet{
+			PacketType: networking.PacketTypeInfoHashingCompleted,
+			Payload: hashInfo,
+		}
+
+		if err := s.Encoder.Encode(hashPacket); err != nil {
+			s.VerbosePrintln("Error while sending complete hashing info:", err)
+			return
+		}
+
+		readOffset += uint64(networking.HashSizeSha256)
+	}
+
+	s.CompleteHashing()
+}
+
 func (s *Server) CheckTermination() bool {
 	select {
 	case <-s.TermChan:
@@ -118,14 +178,10 @@ func (s *Server) handleWriteInfoPacket(packet *networking.Packet) {
 		s.VerbosePrintln("invalid payload type for WriteInfo")
 	}
 
-	writeOffset := writeInfo.Sector * s.ClientInfo.SectorSize
+	writeOffset := int64(writeInfo.Sector) * int64(s.ClientInfo.SectorSize)
 	dataToWrite := writeInfo.Data[:writeInfo.Size]
 
-	if _, err := s.TargetDevFd.Seek(int64(writeOffset), io.SeekStart); err != nil {
-		s.VerbosePrintln("Failed to seek in device:", err)
-	}
-
-	if _, err := s.TargetDevFd.Write(dataToWrite); err != nil {
+	if _, err := s.TargetDevFd.WriteAt(dataToWrite, writeOffset); err != nil {
 		s.VerbosePrintln("Failed to write data to device:", err)
 	}
 }

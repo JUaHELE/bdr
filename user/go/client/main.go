@@ -109,6 +109,11 @@ func (c *Client) CheckTermination() bool {
 	}
 }
 
+func (c *Client) ResetBufferIOCTL() {
+	c.VerbosePrintln("Reseting buffer...")
+	c.serveIOCTL(BDR_CMD_GET_BUFFER_INFO, 0)
+}
+
 func (c *Client) GetBufferInfoByteOffset(bufferInfo *BufferInfo, off uint64) uint64 {
 	offset := ((bufferInfo.Offset + off) % bufferInfo.MaxWrites) * uint64(c.TargetInfo.WriteInfoSize)
 	return offset
@@ -236,16 +241,6 @@ func (c *Client) SendInitPacket(device string) error {
 	return nil
 }
 
-func (c *Client) ResetBufferIOCTL() {
-	c.DebugPrintln("Reseting kernel buffer...")
-	c.serveIOCTL(BDR_CMD_RESET_BUFFER, 0)
-}
-
-func (c *Client) ReadBufferIOCTL(arg uintptr) {
-	c.DebugPrintln("Getting information from buffer...")
-	c.serveIOCTL(BDR_CMD_READ_BUFFER_INFO, arg)
-}
-
 func NewClient(cfg *Config) (*Client, error) {
 	// open control device
 	charDevFd, err := os.OpenFile(cfg.CharDevicePath, os.O_RDWR, 0600)
@@ -320,8 +315,6 @@ func (c *Client) CloseResources() {
 		syscall.Munmap(c.Buf)
 	}
 }
-
-
 
 func (c *Client) InitiateCheckedReplication() {
 	// reset the buffer since the data will still be replicated
@@ -515,7 +508,7 @@ func main() {
 	}
 
 	if err := client.SendInitPacket(cfg.UnderDevicePath); err != nil {
-		log.Fatalf("failed to sent init packet: %w", err)
+		log.Fatalf("failed to sent init packet: %v", err)
 	}
 
 	client.Run()
