@@ -16,6 +16,7 @@ import (
 	"time"
 	"syscall"
 	"io"
+
 	simdsha256 "github.com/minio/sha256-simd"
 )
 
@@ -88,7 +89,7 @@ func (s *Server) CompleteHashing() {
 	s.VerbosePrintln("Hashing completed.")
 }
 
-func (s *Server) HashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
+func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	s.VerbosePrintln("Hashing disk...")
 
 	buf := make([]byte, networking.HashSizeSha256)
@@ -98,7 +99,8 @@ func (s *Server) HashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	for {
 		n, err := s.TargetDevFd.ReadAt(buf, int64(readOffset))
 		if err != nil && err != io.EOF {
-			s.VerbosePrintln("Error while hashing dish:", err)
+			s.VerbosePrintln("Error while hashing disk:", err)
+			// TODO: sendErrorPacket
 		}
 
 		if n == 0 {
@@ -186,6 +188,8 @@ func (s *Server) handleWriteInfoPacket(packet *networking.Packet) {
 	}
 }
 
+// TODO: send error info packets, whenever error
+
 func (s *Server) WaitForInitInfo() error {
 	packet := &networking.Packet{}
 	if err := s.Decoder.Decode(packet); err != nil {
@@ -210,7 +214,7 @@ func (s *Server) WaitForInitInfo() error {
 	return nil
 }
 
-func (s *Server) CheckValidSizes() {
+func (s *Server) CheckValidSizes() bool {
 	deviceSize, err := utils.GetDeviceSize(s.Config.TargetDevPath)
 	if err != nil || deviceSize != s.ClientInfo.DeviceSize{
 		errPacket := networking.Packet{
@@ -223,9 +227,11 @@ func (s *Server) CheckValidSizes() {
 			s.VerbosePrintln("Error when sending errInit packet")
 		}
 		s.Println("WARNING: Client has different size of the block device!")
+		return false
 	} else {
 		s.VerbosePrintln("Client is acceptable.")
 	}
+	return true
 }
 
 func (s *Server) HandleClient(wg *sync.WaitGroup) {
@@ -239,7 +245,9 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		return
 	}
 
-	s.CheckValidSizes()
+	if valid := s.CheckValidSizes(); !valid {
+		return
+	}
 
 	for {
 		if s.CheckTermination() {
@@ -260,9 +268,10 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		switch packet.PacketType {
 		case networking.PacketTypeCmdGetHashes:
 			s.DebugPrintln("Get hashes packet received.")
+			// go s.hashDiskAndSend()
 		case networking.PacketTypeWriteInfo:
 			s.DebugPrintln("Write infomation packet received.")
-			s.handleWriteInfoPacket(packet)
+			go s.handleWriteInfoPacket(packet)
 		default:
 			s.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}

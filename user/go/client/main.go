@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	simdsha256 "github.com/minio/sha256-simd"
 )
 
 type atomic_t int32
@@ -239,6 +241,26 @@ func (c *Client) SendInitPacket(device string) error {
 	c.sendPacket(&packet)
 
 	return nil
+}
+
+func (c *Client) handleHashPacket(hashInfo *networking.HashInfo) {
+	buf := make([]byte, hashInfo.Size)
+	if _, err := c.UnderDevFile.ReadAt(buf, int64(hashInfo.Offset)); err != nil && err != io.EOF {
+		c.VerbosePrintln("Error while hashing...")
+		// TODO: error: send another request
+	}
+
+	shaWriter := simdsha256.New()
+	shaWriter.Write(buf)
+
+	hash := shaWriter.Sum(nil)
+
+	if !bytes.Equal(hash[:], hashInfo.Hash[:]) {
+		c.VerbosePrintln("Hashes are not equal")
+		// TODO: send correct block
+	}
+
+	c.VerbosePrintln("Blocks are equal...")
 }
 
 func NewClient(cfg *Config) (*Client, error) {
