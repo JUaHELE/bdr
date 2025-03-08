@@ -486,6 +486,31 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 
 	hashWg.Add(1)
 	go c.handleHashPacket(packet, &hashWg)
+
+	for {
+		packet := &networking.Packet{}
+		c.receivePacket(packet)
+
+		if c.CheckTermination() {
+			c.VerbosePrintln("Terminating hashing handler.")
+			return
+		}
+
+		switch packet.PacketType {
+		case networking.PacketTypeErrInit:
+			c.Println("ERROR: Remote and local devices do not have the same size.")
+		case networking.PacketTypeHash:
+			hashWg.Add(1)
+			go c.handleHashPacket(packet, &hashWg)
+		case networking.PacketTypeHashError:
+			c.VerbosePrintln("ERROR: error occured on the remote side while hashing, retrying...")
+		case networking.PacketTypeInfoHashingCompleted:
+			c.VerbosePrintln("Hashing completed!")
+			return
+		default:
+			c.VerbosePrintln("Unknown packet received while in hashing mode:", packet.PacketType)
+		}
+	}
 }
 
 func (c *Client) ListenPackets(wg *sync.WaitGroup) {
