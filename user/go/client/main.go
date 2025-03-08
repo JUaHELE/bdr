@@ -113,7 +113,7 @@ func (c *Client) CheckTermination() bool {
 
 func (c *Client) ResetBufferIOCTL() {
 	c.VerbosePrintln("Reseting buffer...")
-	c.serveIOCTL(BDR_CMD_GET_BUFFER_INFO, 0)
+	c.serveIOCTL(BDR_CMD_RESET_BUFFER, 0)
 }
 
 func (c *Client) GetBufferInfoByteOffset(bufferInfo *BufferInfo, off uint64) uint64 {
@@ -243,11 +243,21 @@ func (c *Client) SendInitPacket(device string) error {
 	return nil
 }
 
-func (c *Client) handleHashPacket(hashInfo *networking.HashInfo) {
+func (c *Client) handleHashPacket(packet *networking.Packet, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	hashInfo, ok := packet.Payload.(networking.HashInfo)
+	if !ok {
+		c.VerbosePrintln("invalid payload for type for HashInfo")
+		c.InitiateCheckedReplication()
+		return
+	}
+
 	buf := make([]byte, hashInfo.Size)
 	if _, err := c.UnderDevFile.ReadAt(buf, int64(hashInfo.Offset)); err != nil && err != io.EOF {
 		c.VerbosePrintln("Error while hashing...")
-		// TODO: error: send another request
+		c.InitiateCheckedReplication()
+		return
 	}
 
 	shaWriter := simdsha256.New()
@@ -256,11 +266,12 @@ func (c *Client) handleHashPacket(hashInfo *networking.HashInfo) {
 	hash := shaWriter.Sum(nil)
 
 	if !bytes.Equal(hash[:], hashInfo.Hash[:]) {
-		c.VerbosePrintln("Hashes are not equal")
+		c.DebugPrintln("Hashes are not equal")
 		// TODO: send correct block
+		return
 	}
 
-	c.VerbosePrintln("Blocks are equal...")
+	c.DebugPrintln("Blocks are equal...")
 }
 
 func NewClient(cfg *Config) (*Client, error) {
@@ -468,6 +479,15 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 	}
 }
 
+func (c *Client) handleHashing(packet *networking.Packet) {
+	c.DebugPrintln("Starting hashing faze...")
+	var hashWg sync.WaitGroup
+	defer hashWg.Wait()
+
+	hashWg.Add(1)
+	go c.handleHashPacket(packet, &hashWg)
+}
+
 func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -482,8 +502,15 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 
 		switch packet.PacketType {
 		case networking.PacketTypeErrInit:
-			c.Println("WARNING: Remote and local devices do not have the same size.")
+			c.Println("ERROR: Remote and local devices do not have the same size.")
+		case networking.PacketTypeHash:
+			c.handleHashing(packet)
+		case networking.PacketTypeHashError:
+			c.Println("ERROR: hash error accepted while not in hash mode")
+		case networking.PacketTypeInfoHashingCompleted:
+			c.DebugPrintln("ERROR: hashing completed packet accepted while not in hash mode")
 		default:
+			// TODO: start monitoring
 			c.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}
 	}

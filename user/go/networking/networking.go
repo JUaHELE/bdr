@@ -18,6 +18,8 @@ const (
 	PacketTypeErrInit
 	PacketTypeSha256
 	PacketTypeInfoHashingCompleted
+	PacketTypeHash
+	PacketTypeHashError
 )
 
 type InitInfo struct {
@@ -38,6 +40,7 @@ type WriteInfo struct {
 type HashInfo struct {
 	Offset uint64
 	Size uint32
+	Last bool
 	Hash []byte
 }
 

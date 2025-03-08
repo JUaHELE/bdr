@@ -20,6 +20,15 @@ import (
 	simdsha256 "github.com/minio/sha256-simd"
 )
 
+const (
+	PollInterval  = 100 // in milliseconds
+	RetryInterval = 1   // seconds
+)
+
+func RetrySleep() {
+	time.Sleep(RetryInterval * time.Second)
+}
+
 type Server struct {
 	Config      *Config
 	Listener    net.Listener
@@ -74,6 +83,40 @@ func NewServer(cfg *Config) (*Server, error) {
 	return server, nil
 }
 
+func (s *Server) sendPacket(packet *networking.Packet) {
+	for {
+		err := s.Encoder.Encode(packet)
+		if err != nil {
+			if terminated := s.CheckTermination(); terminated {
+				s.VerbosePrintln("Terminating attepmt for successfull packet send...")
+				return
+			}
+
+			s.VerbosePrintln("SendPacket failed: ", err)
+			RetrySleep()
+			continue
+		}
+		break
+	}
+}
+
+func (s *Server) receivePacket(packet *networking.Packet) {
+	for {
+		err := s.Decoder.Decode(packet)
+		if err != nil {
+			if terminated := s.CheckTermination(); terminated {
+				s.VerbosePrintln("Terminating attepmt for successfull packet send...")
+				return
+			}
+
+			s.VerbosePrintln("receivePacket failed: ", err)
+			RetrySleep()
+			continue
+		}
+		break
+	}
+}
+
 func (s *Server) CompleteHashing() {
 	packet := &networking.Packet{
 		PacketType: networking.PacketTypeInfoHashingCompleted,
@@ -89,18 +132,30 @@ func (s *Server) CompleteHashing() {
 	s.VerbosePrintln("Hashing completed.")
 }
 
+// TODO: parallelize
 func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	s.VerbosePrintln("Hashing disk...")
 
-	buf := make([]byte, networking.HashSizeSha256)
+	buf := make([]byte, hashedSpace)
 
 	readOffset := uint64(0)
 
 	for {
+		if terminated := ChanHasTerminated(termChan); terminated {
+			s.Println("Hashing has terminated!")
+			return
+		}
+
 		n, err := s.TargetDevFd.ReadAt(buf, int64(readOffset))
 		if err != nil && err != io.EOF {
 			s.VerbosePrintln("Error while hashing disk:", err)
-			// TODO: sendErrorPacket
+
+			errPacket := networking.Packet{
+				PacketType: networking.PacketTypeHashError,
+			}
+			s.sendPacket(&errPacket)
+
+			return
 		}
 
 		if n == 0 {
@@ -114,21 +169,26 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 
 		hashInfo := networking.HashInfo{
 			Offset: readOffset,
-			Size: uint32(networking.HashedSpaceBase),
+			Size: uint32(hashedSpace),
 			Hash: hash,
 		}
 
 		hashPacket := networking.Packet{
-			PacketType: networking.PacketTypeInfoHashingCompleted,
+			PacketType: networking.PacketTypeHash,
 			Payload: hashInfo,
 		}
 
-		if err := s.Encoder.Encode(hashPacket); err != nil {
+		if err := s.Encoder.Encode(&hashPacket); err != nil {
 			s.VerbosePrintln("Error while sending complete hashing info:", err)
+
+			errPacket := networking.Packet{
+				PacketType: networking.PacketTypeHashError,
+			}
+			s.sendPacket(&errPacket)
 			return
 		}
 
-		readOffset += uint64(networking.HashSizeSha256)
+		readOffset += uint64(hashedSpace)
 	}
 
 	s.CompleteHashing()
@@ -137,6 +197,15 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 func (s *Server) CheckTermination() bool {
 	select {
 	case <-s.TermChan:
+		return true
+	default:
+		return false
+	}
+}
+
+func ChanHasTerminated(termChan chan struct{}) bool {
+	select {
+	case <-termChan:
 		return true
 	default:
 		return false
@@ -188,8 +257,6 @@ func (s *Server) handleWriteInfoPacket(packet *networking.Packet) {
 	}
 }
 
-// TODO: send error info packets, whenever error
-
 func (s *Server) WaitForInitInfo() error {
 	packet := &networking.Packet{}
 	if err := s.Decoder.Decode(packet); err != nil {
@@ -240,6 +307,8 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 
 	s.Println("Accepted connection from", s.Conn.RemoteAddr())
 
+	hashingTermChan := make(chan struct{})
+
 	if err := s.WaitForInitInfo(); err != nil {
 		s.Println("Error occured while waiting on init packet:", err)
 		return
@@ -268,7 +337,9 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		switch packet.PacketType {
 		case networking.PacketTypeCmdGetHashes:
 			s.DebugPrintln("Get hashes packet received.")
-			// go s.hashDiskAndSend()
+			close(hashingTermChan)
+			hashingTermChan := make(chan struct{})
+			go s.hashDiskAndSend(hashingTermChan, networking.HashedSpaceBase)
 		case networking.PacketTypeWriteInfo:
 			s.DebugPrintln("Write infomation packet received.")
 			go s.handleWriteInfoPacket(packet)
