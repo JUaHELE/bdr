@@ -25,6 +25,15 @@ const (
 	RetryInterval = 1   // seconds
 )
 
+const (
+	ConnectionTimeout = 30 * time.Second
+	ReconnectDelay    = 5 * time.Second
+)
+
+const (
+	WritePacketQueueSize = 100
+)
+
 func RetrySleep() {
 	time.Sleep(RetryInterval * time.Second)
 }
@@ -54,10 +63,6 @@ func (s *Server) DebugPrintln(args ...interface{}) {
 	s.Config.DebugPrintln(args...)
 }
 
-const (
-	ConnectionTimeout = 30 * time.Second
-	ReconnectDelay    = 5 * time.Second
-)
 
 func NewServer(cfg *Config) (*Server, error) {
 	targetDeviceFd, err := os.OpenFile(cfg.TargetDevPath, os.O_RDWR, 0600)
@@ -234,18 +239,20 @@ func (s *Server) CloseClientConn() {
 	s.Decoder = nil
 }
 
-func (s *Server) handleWriteInfoPacket(packet *networking.Packet) {
-	s.DebugPrintln("Write infomation packet received.")
-	writeInfo, ok := packet.Payload.(networking.WriteInfo)
-	if !ok {
-		s.VerbosePrintln("invalid payload type for WriteInfo")
-	}
+func (s *Server) handleWriteInfoPacket(writeChan chan *networking.Packet) {
+	for packet := range writeChan {
+		s.DebugPrintln("Write infomation packet received.")
+		writeInfo, ok := packet.Payload.(networking.WriteInfo)
+		if !ok {
+			s.VerbosePrintln("invalid payload type for WriteInfo")
+		}
 
-	writeOffset := int64(writeInfo.Sector) * int64(s.ClientInfo.SectorSize)
-	dataToWrite := writeInfo.Data[:writeInfo.Size]
+		writeOffset := int64(writeInfo.Sector) * int64(s.ClientInfo.SectorSize)
+		dataToWrite := writeInfo.Data[:writeInfo.Size]
 
-	if _, err := s.TargetDevFd.WriteAt(dataToWrite, writeOffset); err != nil {
-		s.VerbosePrintln("Failed to write data to device:", err)
+		if _, err := s.TargetDevFd.WriteAt(dataToWrite, writeOffset); err != nil {
+			s.VerbosePrintln("Failed to write data to device:", err)
+		}
 	}
 }
 
@@ -315,6 +322,11 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 
 	hashingTermChan := make(chan struct{})
 
+	writeQueue := make(chan *networking.Packet, WritePacketQueueSize)
+	defer close(writeQueue)
+
+	go s.handleWriteInfoPacket(writeQueue)
+
 	if err := s.WaitForInitInfo(); err != nil {
 		s.Println("Error occured while waiting on init packet:", err)
 		return
@@ -346,7 +358,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			hashingTermChan = make(chan struct{})
 			go s.hashDiskAndSend(hashingTermChan, networking.HashedSpaceBase)
 		case networking.PacketTypeWriteInfo:
-			s.handleWriteInfoPacket(packet)
+			writeQueue <- packet
 		case networking.PacketTypeCorrectBlock:
 			s.DebugPrintln("Correct block arrived")
 			go s.handleCorrectPacket(packet)
