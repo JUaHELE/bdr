@@ -302,7 +302,7 @@ func (s *Server) CheckValidSizes() bool {
 	return true
 }
 
-func (s *Server) handleCorrectBlock(packet *networking.Packet) {
+func (s *Server) handleCorrectPacket(packet *networking.Packet) {
 	s.DebugPrintln("Writing correct block...")
 
 	correctInfo, ok := packet.Payload.(networking.CorrectBlockInfo)
@@ -358,6 +358,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			go s.handleWriteInfoPacket(packet)
 		case networking.PacketTypeCorrectBlock:
 			s.DebugPrintln("Correct block arrived")
+			go s.handleCorrectPacket(packet)
 		default:
 			s.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}
