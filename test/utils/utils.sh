@@ -3,6 +3,8 @@
 declare -ga LOOP_DEVICES
 TMP_DIR=$(mktemp -d)
 
+SRC_DIR="../../kern/"
+
 # FUNCTIONS ------
 
 log_info() {
@@ -12,6 +14,18 @@ log_info() {
 error_exit() {
 	echo "[ERROR]: $1" >&2
 	exit 1
+}
+
+make_driver() {
+	log_info "Compiling the kernel driver..."
+	make -C "$SRC_DIR" > /dev/null 2>&1 || error_exit "Failed to compile the source directory"
+}
+
+load_driver() {
+	log_info "Loading the driver into the kernel..."
+	if ! lsmod | grep -q bdr; then
+		sudo insmod "$SRC_DIR/bdr.ko" || error_exit "Failed to load the kernel driver"
+	fi
 }
 
 create_loop_device() {

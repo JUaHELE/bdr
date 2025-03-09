@@ -494,7 +494,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 			continue
 		}
 
-		bufferInfo.Print()
+		// bufferInfo.Print()
 		c.ProcessBufferInfo(&bufferInfo)
 	}
 }
