@@ -380,6 +380,10 @@ func (c *Client) InitiateCheckedReplication() {
 
 func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 	for i := uint64(0); i < bufferInfo.Length; i++ {
+		if c.MonitorPauseContr.IsPaused() {
+			return
+		}
+
 		for {
 			bufBegin := c.GetBufferInfoByteOffset(bufferInfo, i)
 			bufEnd := bufBegin + uint64(c.TargetInfo.WriteInfoSize)

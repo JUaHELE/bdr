@@ -50,6 +50,22 @@ func (p *PauseController) Resume() {
 	p.stateChan <- Running
 }
 
+func (p *PauseController) IsPaused() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	
+	// Make a non-blocking check to see if there's a state in the channel
+	select {
+	case state := <-p.stateChan:
+		// Put the state back in the channel for other operations
+		p.stateChan <- state
+		return state == Paused
+	default:
+		// If channel is empty, default to Running state
+		return false
+	}
+}
+
 // false is returned if its not by termination, true otherwise
 func (p *PauseController) waitUntilResumed(termChan <-chan struct{}) bool {
 	for {

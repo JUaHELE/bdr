@@ -141,7 +141,7 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	readOffset := uint64(0)
 
 	for {
-		if terminated := ChanHasTerminated(termChan); terminated {
+		if terminated := utils.ChanHasTerminated(termChan); terminated {
 			s.Println("Hashing has terminated!")
 			return
 		}
@@ -197,15 +197,6 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 func (s *Server) CheckTermination() bool {
 	select {
 	case <-s.TermChan:
-		return true
-	default:
-		return false
-	}
-}
-
-func ChanHasTerminated(termChan chan struct{}) bool {
-	select {
-	case <-termChan:
 		return true
 	default:
 		return false

@@ -186,3 +186,62 @@ func TestResumeFunctionality(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestIsPaused(t *testing.T) {
+	pc := NewPauseController()
+	
+	// Default state should be not paused
+	if pc.IsPaused() {
+		t.Error("New controller should not be paused by default")
+	}
+	
+	// Test paused state
+	pc.Pause()
+	if !pc.IsPaused() {
+		t.Error("Controller should be paused after Pause()")
+	}
+	
+	// Test resumed state
+	pc.Resume()
+	if pc.IsPaused() {
+		t.Error("Controller should not be paused after Resume()")
+	}
+	
+	// Test concurrency
+	var wg sync.WaitGroup
+	wg.Add(2)
+	
+	// Pause in a goroutine
+	go func() {
+		defer wg.Done()
+		pc.Pause()
+	}()
+	
+	// Give the pause operation time to complete
+	time.Sleep(50 * time.Millisecond)
+	
+	// Check state in another goroutine
+	go func() {
+		defer wg.Done()
+		if !pc.IsPaused() {
+			t.Error("Controller should be paused when checked from another goroutine")
+		}
+	}()
+	
+	wg.Wait()
+	
+	// Multiple calls to IsPaused should be consistent
+	if !pc.IsPaused() {
+		t.Error("First IsPaused check should return true")
+	}
+	
+	if !pc.IsPaused() {
+		t.Error("Second IsPaused check should return true")
+	}
+	
+	// Resume and verify state again
+	pc.Resume()
+	if pc.IsPaused() {
+		t.Error("Controller should not be paused after final Resume()")
+	}
+}

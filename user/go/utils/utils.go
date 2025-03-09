@@ -37,6 +37,15 @@ func AssertInRange(t *testing.T, value, min, max uint64, name string) {
 	}
 }
 
+func ChanHasTerminated(termChan chan struct{}) bool {
+	select {
+	case <-termChan:
+		return true
+	default:
+		return false
+	}
+}
+
 const BLKSSZGET = 0x1268
 
 
