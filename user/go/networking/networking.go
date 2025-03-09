@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	HashedBlockSize = 1 // megabytes
+	HashedBlockSize = 10 // megabytes
 	HashedSpaceBase = 1024 * 1024 * HashedBlockSize
 	HashSizeSha256 = 32 // size of hash in bytes
 )
@@ -20,7 +20,14 @@ const (
 	PacketTypeInfoHashingCompleted
 	PacketTypeHash
 	PacketTypeHashError
+	PacketTypeCorrectBlock
 )
+
+type CorrectBlockInfo struct {
+	Offset uint64
+	Size uint32
+	Data []byte
+}
 
 type InitInfo struct {
 	SectorSize uint32
@@ -40,7 +47,6 @@ type WriteInfo struct {
 type HashInfo struct {
 	Offset uint64
 	Size uint32
-	Last bool
 	Hash []byte
 }
 
@@ -61,4 +67,5 @@ func RegisterGobPackets() {
 	gob.Register(WriteInfo{})
 	gob.Register(HashInfo{})
 	gob.Register(InitInfo{})
+	gob.Register(CorrectBlockInfo{})
 }

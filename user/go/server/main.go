@@ -244,6 +244,7 @@ func (s *Server) CloseClientConn() {
 }
 
 func (s *Server) handleWriteInfoPacket(packet *networking.Packet) {
+	s.DebugPrintln("Write infomation packet received.")
 	writeInfo, ok := packet.Payload.(networking.WriteInfo)
 	if !ok {
 		s.VerbosePrintln("invalid payload type for WriteInfo")
@@ -301,6 +302,20 @@ func (s *Server) CheckValidSizes() bool {
 	return true
 }
 
+func (s *Server) handleCorrectBlock(packet *networking.Packet) {
+	s.DebugPrintln("Writing correct block...")
+
+	correctInfo, ok := packet.Payload.(networking.CorrectBlockInfo)
+	if !ok {
+		s.VerbosePrintln("invalid packet type for correctblock")
+	}
+	
+	if _, err := s.TargetDevFd.WriteAt(correctInfo.Data, int64(correctInfo.Offset)); err != nil {
+		s.VerbosePrintln("Can't write correct block")
+		// TODO: solve this - maybe ask for it again
+	}
+}
+
 func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	defer s.CloseClientConn()
 	defer wg.Done()
@@ -336,13 +351,13 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 
 		switch packet.PacketType {
 		case networking.PacketTypeCmdGetHashes:
-			s.DebugPrintln("Get hashes packet received.")
 			close(hashingTermChan)
 			hashingTermChan := make(chan struct{})
 			go s.hashDiskAndSend(hashingTermChan, networking.HashedSpaceBase)
 		case networking.PacketTypeWriteInfo:
-			s.DebugPrintln("Write infomation packet received.")
 			go s.handleWriteInfoPacket(packet)
+		case networking.PacketTypeCorrectBlock:
+			s.DebugPrintln("Correct block arrived")
 		default:
 			s.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}

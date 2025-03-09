@@ -243,6 +243,21 @@ func (c *Client) SendInitPacket(device string) error {
 	return nil
 }
 
+func (c *Client) sendCorrectBlock(buf []byte, offset uint64, size uint32) {
+	correctBlockInfo := &networking.CorrectBlockInfo{
+		Offset: offset,
+		Size: size,
+		Data: buf,
+	}
+
+	correctBlockPacket := &networking.Packet{
+		PacketType: networking.PacketTypeCorrectBlock,
+		Payload: correctBlockInfo,
+	}
+
+	c.sendPacket(correctBlockPacket)
+}
+
 func (c *Client) handleHashPacket(packet *networking.Packet, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -266,8 +281,8 @@ func (c *Client) handleHashPacket(packet *networking.Packet, wg *sync.WaitGroup)
 	hash := shaWriter.Sum(nil)
 
 	if !bytes.Equal(hash[:], hashInfo.Hash[:]) {
-		c.DebugPrintln("Hashes are not equal")
-		// TODO: send correct block
+		c.DebugPrintln("Blocks are not equal")
+		c.sendCorrectBlock(buf, hashInfo.Offset, hashInfo.Size)
 		return
 	}
 
@@ -480,7 +495,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 }
 
 func (c *Client) handleHashing(packet *networking.Packet) {
-	c.DebugPrintln("Starting hashing faze...")
+	c.DebugPrintln("Starting hashing phase...")
 	var hashWg sync.WaitGroup
 	defer hashWg.Wait()
 
@@ -505,7 +520,7 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 		case networking.PacketTypeHashError:
 			c.VerbosePrintln("ERROR: error occured on the remote side while hashing, retrying...")
 		case networking.PacketTypeInfoHashingCompleted:
-			c.VerbosePrintln("Hashing completed!")
+			c.VerbosePrintln("Hashing completed packet received")
 			return
 		default:
 			c.VerbosePrintln("Unknown packet received while in hashing mode:", packet.PacketType)
