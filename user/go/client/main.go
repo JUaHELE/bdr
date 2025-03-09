@@ -380,6 +380,7 @@ func (c *Client) InitiateCheckedReplication() {
 
 func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 	for i := uint64(0); i < bufferInfo.Length; i++ {
+		// if monitor is paused, we are hashing and there is no point of continuing
 		if c.MonitorPauseContr.IsPaused() {
 			return
 		}

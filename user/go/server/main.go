@@ -346,7 +346,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			hashingTermChan = make(chan struct{})
 			go s.hashDiskAndSend(hashingTermChan, networking.HashedSpaceBase)
 		case networking.PacketTypeWriteInfo:
-			go s.handleWriteInfoPacket(packet)
+			s.handleWriteInfoPacket(packet)
 		case networking.PacketTypeCorrectBlock:
 			s.DebugPrintln("Correct block arrived")
 			go s.handleCorrectPacket(packet)
