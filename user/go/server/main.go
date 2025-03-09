@@ -352,7 +352,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		switch packet.PacketType {
 		case networking.PacketTypeCmdGetHashes:
 			close(hashingTermChan)
-			hashingTermChan := make(chan struct{})
+			hashingTermChan = make(chan struct{})
 			go s.hashDiskAndSend(hashingTermChan, networking.HashedSpaceBase)
 		case networking.PacketTypeWriteInfo:
 			go s.handleWriteInfoPacket(packet)

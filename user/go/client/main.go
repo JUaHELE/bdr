@@ -497,6 +497,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 func (c *Client) handleHashing(packet *networking.Packet) {
 	c.DebugPrintln("Starting hashing phase...")
 	var hashWg sync.WaitGroup
+	defer c.MonitorPauseContr.Resume()
 	defer hashWg.Wait()
 
 	hashWg.Add(1)
@@ -550,7 +551,6 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 		case networking.PacketTypeInfoHashingCompleted:
 			c.DebugPrintln("ERROR: hashing completed packet accepted while not in hash mode")
 		default:
-			// TODO: start monitoring
 			c.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}
 	}
