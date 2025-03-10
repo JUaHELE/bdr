@@ -640,10 +640,13 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 // Run starts the client and handles graceful shutdown
 func (c *Client) Run() {
 	c.Println("Starting bdr client connected to", c.Config.IpAddress, "and port", c.Config.Port)
+	if c.Config.InitialReplication {
+		c.InitiateCheckedReplication()
+	}
 
 	// Start goroutines with wait group for clean shutdown
 	var termWg sync.WaitGroup
-	
+
 	// Start change monitor goroutine
 	termWg.Add(1)
 	go c.MonitorChanges(&termWg)

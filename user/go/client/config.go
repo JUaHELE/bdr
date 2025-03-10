@@ -17,8 +17,7 @@ const (
 	DefaultVerbose            = false
 	DefaultDebug              = false
 	DefaultNoPrint            = false
-	DefaultFullReplication    = false
-	DefaultCheckedReplication = false
+	DefaultInitialReplication = false
 )
 
 // Config holds data passed by arguments
@@ -30,8 +29,7 @@ type Config struct {
 	Verbose            bool   // verbose output of the program
 	Debug              bool   // includes debug prints to verbose
 	NoPrint            bool   // to prints except error messages
-	FullReplication    bool   // replicates the whole disk without checking hashes of blocks
-	CheckedReplication bool   // compares disks if they are the same by doing checksums of blocks
+	InitialReplication bool   // compares disks if they are the same by doing checksums of blocks
 }
 
 /* validate arguments that are passed in the program */
@@ -99,9 +97,11 @@ func NewConfig() *Config {
 	flag.IntVar(&cfg.Port, "port", DefaultPort, "Receiver port")
 	flag.BoolVar(&cfg.Verbose, "verbose", DefaultVerbose, "Provides verbose output of the program")
 	flag.BoolVar(&cfg.Debug, "debug", DefaultDebug, "Provides debug output of the program")
-	flag.BoolVar(&cfg.FullReplication, "replicate", DefaultFullReplication, "Replicates whole device over the network")
-	flag.BoolVar(&cfg.CheckedReplication, "hashreplicate", DefaultCheckedReplication, "Initiates checked replication. Compares checksums of blocks on local and remote device, and those blocks are exchanged in case of missmatch")
 	flag.BoolVar(&cfg.NoPrint, "noprint", DefaultNoPrint, "Disables prints")
+	flag.BoolVar(&cfg.InitialReplication, "noreplication", DefaultInitialReplication, "Disables replication when started")
 	flag.Parse()
+
+	cfg.InitialReplication = !cfg.InitialReplication
+
 	return cfg
 }
