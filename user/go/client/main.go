@@ -209,6 +209,10 @@ func (c *Client) receivePacket(packet *networking.Packet) {
 				return
 			}
 
+			if err == io.EOF {
+				// connection lost, trying to reconnect to the server
+			}
+
 			c.VerbosePrintln("receivePacket failed: ", err)
 			RetrySleep()
 			continue

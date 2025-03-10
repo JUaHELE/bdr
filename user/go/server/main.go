@@ -325,7 +325,13 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	writeQueue := make(chan *networking.Packet, WritePacketQueueSize)
 	defer close(writeQueue)
 
-	go s.handleWriteInfoPacket(writeQueue)
+	var childWg sync.WaitGroup
+
+	childWg.Add(1)
+	go func() {
+		defer childWg.Done()
+		s.handleWriteInfoPacket(writeQueue)
+	}()
 
 	if err := s.WaitForInitInfo(); err != nil {
 		s.Println("Error occured while waiting on init packet:", err)
@@ -356,12 +362,20 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		case networking.PacketTypeCmdGetHashes:
 			close(hashingTermChan)
 			hashingTermChan = make(chan struct{})
-			go s.hashDiskAndSend(hashingTermChan, networking.HashedSpaceBase)
+			childWg.Add(1)
+			go func() {
+				defer childWg.Done()
+				s.hashDiskAndSend(hashingTermChan, networking.HashedSpaceBase)
+			}()
 		case networking.PacketTypeWriteInfo:
 			writeQueue <- packet
 		case networking.PacketTypeCorrectBlock:
 			s.DebugPrintln("Correct block arrived")
-			go s.handleCorrectPacket(packet)
+			childWg.Add(1)
+			go func() {
+				defer childWg.Done()
+				s.handleCorrectPacket(packet)
+			}()
 		default:
 			s.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}
