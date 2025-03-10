@@ -16,6 +16,7 @@ import (
 	"time"
 	"syscall"
 	"io"
+	"runtime"
 
 	simdsha256 "github.com/minio/sha256-simd"
 )
@@ -152,73 +153,151 @@ func (s *Server) CompleteHashing() {
 }
 
 // hashDiskAndSend reads the disk in chunks, computes SHA-256 hashes, and sends them to the client
-// TODO: parallelize
 func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	s.VerbosePrintln("Hashing disk...")
-
-	// Buffer for reading disk blocks
-	buf := make([]byte, hashedSpace)
-
-	readOffset := uint64(0)
-
-	for {
+	
+	// Number of worker goroutines to use
+	numWorkers := runtime.NumCPU()
+	
+	// Create work and result channels
+	type workItem struct {
+		offset uint64
+		buffer []byte
+	}
+	type resultItem struct {
+		offset uint64
+		size   uint32
+		hash   []byte
+		err    error
+	}
+	
+	workChan := make(chan workItem, numWorkers*2)
+	resultChan := make(chan resultItem, numWorkers*2)
+	doneChan := make(chan struct{})
+	
+	// Launch worker goroutines
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for work := range workChan {
+				// Check for termination
+				if utils.ChanHasTerminated(termChan) {
+					return
+				}
+				
+				// Compute SHA-256 hash using SIMD-accelerated implementation
+				shaWriter := simdsha256.New()
+				shaWriter.Write(work.buffer)
+				hash := shaWriter.Sum(nil)
+				
+				resultChan <- resultItem{
+					offset: work.offset,
+					size:   uint32(len(work.buffer)),
+					hash:   hash,
+					err:    nil,
+				}
+			}
+		}()
+	}
+	
+	// Start a goroutine to close resultChan when all workers are done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+		close(doneChan)
+	}()
+	
+	// Start a goroutine to read disk blocks and send to workers
+	go func() {
+		defer close(workChan)
+		
+		readOffset := uint64(0)
+		for {
+			// Check for termination request
+			if utils.ChanHasTerminated(termChan) {
+				return
+			}
+			
+			// Create a new buffer for each read to avoid data races
+			buf := make([]byte, hashedSpace)
+			
+			// Read a block from the disk
+			n, err := s.TargetDevFd.ReadAt(buf, int64(readOffset))
+			if err != nil && err != io.EOF {
+				resultChan <- resultItem{
+					offset: readOffset,
+					err:    err,
+				}
+				return
+			}
+			
+			// End of disk reached
+			if n == 0 {
+				break
+			}
+			
+			// Adjust buffer size if we read less than expected
+			if n < len(buf) {
+				buf = buf[:n]
+			}
+			
+			// Send work to a worker
+			workChan <- workItem{
+				offset: readOffset,
+				buffer: buf,
+			}
+			
+			// Move to next block
+			readOffset += uint64(n)
+		}
+	}()
+	
+	// Process results and send to client
+	for result := range resultChan {
 		// Check for termination request
-		if terminated := utils.ChanHasTerminated(termChan); terminated {
+		if utils.ChanHasTerminated(termChan) {
 			s.Println("Hashing has terminated!")
 			return
 		}
-
-		// Read a block from the disk
-		n, err := s.TargetDevFd.ReadAt(buf, int64(readOffset))
-		if err != nil && err != io.EOF {
-			s.VerbosePrintln("Error while hashing disk:", err)
-
+		
+		// Handle errors
+		if result.err != nil {
+			s.VerbosePrintln("Error while hashing disk:", result.err)
 			// Notify client about the error
 			errPacket := networking.Packet{
 				PacketType: networking.PacketTypeHashError,
 			}
 			s.sendPacket(&errPacket)
-
 			return
 		}
-
-		// End of disk reached
-		if n == 0 {
-			break
-		}
-
-		// Compute SHA-256 hash using SIMD-accelerated implementation
-		shaWriter := simdsha256.New()
-		shaWriter.Write(buf)
-		hash := shaWriter.Sum(nil)
-
+		
 		// Create hash information packet
 		hashInfo := networking.HashInfo{
-			Offset: readOffset,
-			Size:   uint32(hashedSpace),
-			Hash:   hash,
+			Offset: result.offset,
+			Size:   result.size,
+			Hash:   result.hash,
 		}
-
 		hashPacket := networking.Packet{
 			PacketType: networking.PacketTypeHash,
 			Payload:    hashInfo,
 		}
-
+		
 		// Send hash to client
 		if err := s.Encoder.Encode(&hashPacket); err != nil {
 			s.VerbosePrintln("Error while sending complete hashing info:", err)
-
 			errPacket := networking.Packet{
 				PacketType: networking.PacketTypeHashError,
 			}
 			s.sendPacket(&errPacket)
 			return
 		}
-
-		// Move to next block
-		readOffset += uint64(hashedSpace)
 	}
-
+	
+	// Wait for everything to finish
+	<-doneChan
+	
 	// Notify client that hashing is complete
 	s.CompleteHashing()
 }
