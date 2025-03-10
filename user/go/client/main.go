@@ -148,7 +148,7 @@ func (c *Client) serveIOCTL(cmd uintptr, arg uintptr) {
 	}
 }
 
-func (c *Client) reconnectToServer() {
+func (c *Client) reconnectToServer(sendHashReq bool) {
 	c.VerbosePrintln("Trying to reconnect to the server.")
 
 	if c.Conn != nil {
@@ -163,7 +163,7 @@ func (c *Client) reconnectToServer() {
 			return
 		}
 
-		conn, err := net.DialTimeout("tcp", address, 10*time.Second)
+		conn, err := net.DialTimeout("tcp", address, 2*time.Second)
 		if err == nil {
 			c.Conn = conn
 			c.Encoder = gob.NewEncoder(conn)
@@ -173,6 +173,10 @@ func (c *Client) reconnectToServer() {
 			if err := c.SendInitPacket(c.Config.UnderDevicePath); err != nil {
 				c.Println("Failed to resend init packet during reconnection")
 				continue
+			}
+
+			if sendHashReq {
+				c.InitiateCheckedReplication()
 			}
 
 			c.Println("Successfully reconnected to server")
@@ -200,7 +204,7 @@ func (c *Client) sendPacket(packet *networking.Packet) {
 	}
 }
 
-func (c *Client) receivePacket(packet *networking.Packet) {
+func (c *Client) receivePacket(packet *networking.Packet, sendHashReq bool) {
 	for {
 		err := c.Decoder.Decode(packet)
 		if err != nil {
@@ -211,6 +215,8 @@ func (c *Client) receivePacket(packet *networking.Packet) {
 
 			if err == io.EOF {
 				// connection lost, trying to reconnect to the server
+				c.reconnectToServer(sendHashReq)
+				continue
 			}
 
 			c.VerbosePrintln("receivePacket failed: ", err)
@@ -514,7 +520,8 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 
 	for {
 		packet := &networking.Packet{}
-		c.receivePacket(packet)
+		sendHashReq := true
+		c.receivePacket(packet, sendHashReq)
 
 		if c.CheckTermination() {
 			c.VerbosePrintln("Terminating hashing handler.")
@@ -543,7 +550,8 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 
 	for {
 		packet := &networking.Packet{}
-		c.receivePacket(packet)
+		sendHashReq := false
+		c.receivePacket(packet, sendHashReq)
 
 		if c.CheckTermination() {
 			c.VerbosePrintln("Terminating packet listener.")
