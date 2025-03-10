@@ -107,9 +107,11 @@ compile_and_start_daemons
 log_info "Testing replication..."
 
 log_info "Writing test data to $MAPPER_PATH (source device)..."
-TEST_DATA="HelloBDR"
-echo "$TEST_DATA" | dd of="$MAPPER_PATH" bs=512 count=1 seek=10 conv=fsync &> /dev/null
-sleep 1
+for i in {1..10}; do
+    mkfs.ext4 -F $MAPPER_PATH &> /dev/null
+    # sleep to ensure propagation
+    sleep 1
+done
 
 if cmp "$MAPPER_PATH" "${LOOP_DEVICES[$LOOPDEV_ID]}"; then
     log_info "TEST PASSED"

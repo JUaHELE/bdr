@@ -32,9 +32,15 @@ cleanup() {
 
     rm -rf "$TMP_DIR"
 
+    log_info "Removing device-mapper target..."
+    sudo rmmod bdr 2>&1 > /dev/null || true
+
     log_info "Resources cleaned up."
 }
 trap cleanup EXIT
+
+make_driver
+load_driver
 
 # create one target
 create_targets 1 $TARGET_SIZE $TARGET_NAME $BUFFER_SIZE_IN_WRITES

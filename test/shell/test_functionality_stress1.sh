@@ -107,8 +107,13 @@ compile_and_start_daemons
 log_info "Testing replication..."
 
 log_info "Writing test data to $MAPPER_PATH (source device)..."
-TEST_DATA="HelloBDR"
-echo "$TEST_DATA" | dd of="$MAPPER_PATH" bs=512 count=1 seek=10 conv=fsync &> /dev/null
+
+for i in {1..10}; do
+    dd if=/dev/urandom of="$MAPPER_PATH" bs=4096 count=30 seek=$i conv=fsync &>/dev/null
+    # sleep to ensure propagation
+    sleep 1
+done
+
 sleep 1
 
 if cmp "$MAPPER_PATH" "${LOOP_DEVICES[$LOOPDEV_ID]}"; then

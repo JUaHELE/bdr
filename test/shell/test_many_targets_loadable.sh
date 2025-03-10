@@ -81,6 +81,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
+make_driver
+load_driver
+
 create_targets $TARGETS_CREATED $TARGET_SIZE $TARGET_NAME $BUFFER_SIZE_IN_WRITES
 
 log_info "PASSED"
