@@ -14,7 +14,7 @@ convert_to_writes() {
     local size=$1
     local unit=${size//[0-9.]/}  # Extract unit (K, M, or empty for bytes)
     local value=${size//[^0-9.]/}  # Extract numeric value
-    
+
     # Convert to bytes based on unit
     local bytes
     case "${unit^^}" in
@@ -28,17 +28,17 @@ convert_to_writes() {
             bytes=$value
             ;;
         *)
-            error_exit "Unknown unit: $unit. Use B, K, or M."
+            error_exit "Unknown unit: $unit. Use K, M or nothing"
             ;;
     esac
-    
+
     # Calculate number of writes and round up
     local writes=$(echo "($bytes + $WRITE_SIZE - 1) / $WRITE_SIZE" | bc)
     echo $writes
 }
 
 read -p "Enter target name (name of the device in /dev/mapper): " target_name
-read -p "Enter device unmouned(e.g., /dev/loop0, /dev/sdb2): " device
+read -p "Enter device unmouned (e.g., /dev/loop0, /dev/sdb2): " device
 read -p "Enter character device name (any, but advised similar to target name): " chardev_name
 
 # Ask for buffer size with unit and convert to writes
@@ -54,7 +54,7 @@ fi
 # Create DM target
 echo "0 $(blockdev --getsz $device) bdr $device $chardev_name $buffer_size_in_writes" | \
     sudo dmsetup create "$target_name" || \
-    error_exit "Can't create target '$target_name' on '$device' with character device '$chardev_name' and buffer size '$buffer_size_in_writes'. Probably name collision or bdr module isn't loaded."
+    error_exit "Can't create target '$target_name' on '$device' with character device '$chardev_name' and buffer size $buffer_size_in_writes. Probably name collision or bdr module isn't loaded."
 
-echo "Device Mapper target '$target_name' on '$device' with character device '$chardev_name' and buffer size '$buffer_size_in_writes' created successfully. Your device is available /dev/mapper/$target_name"
+echo "Device Mapper target '$target_name' on '$device' with character device '$chardev_name' and buffer size $buffer_size_in_writes created successfully. Your device is available /dev/mapper/$target_name"
 dmsetup ls
