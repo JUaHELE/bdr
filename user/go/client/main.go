@@ -183,7 +183,7 @@ func (c *Client) reconnectToServer(sendHashReq bool) {
 	for {
 		// Check for termination request
 		if terminated := c.CheckTermination(); terminated {
-			c.VerbosePrintln("Terminating attepmt for reconnect...")
+			c.VerbosePrintln("Terminating attepmt for reconnection...")
 			return
 		}
 
@@ -210,6 +210,7 @@ func (c *Client) reconnectToServer(sendHashReq bool) {
 			return
 		}
 
+		RetrySleep()
 		c.VerbosePrintln("Attempt for reconnection failed. Trying again...")
 	}
 }
@@ -307,39 +308,46 @@ func (c *Client) sendCorrectBlock(buf []byte, offset uint64, size uint32) {
 }
 
 // handleHashPacket processes a hash verification packet
-func (c *Client) handleHashPacket(packet *networking.Packet, wg *sync.WaitGroup) {
-	defer wg.Done()
+func (c *Client) handleHashPacket(hashChan chan *networking.Packet, wg *sync.WaitGroup) {
+	var hashWg sync.WaitGroup
+	for packet := range hashChan {
+		// Extract hash info from packet
+		hashWg.Add(1)
+		go func (){
+			defer hashWg.Done()
 
-	// Extract hash info from packet
-	hashInfo, ok := packet.Payload.(networking.HashInfo)
-	if !ok {
-		c.VerbosePrintln("invalid payload for type for HashInfo")
-		c.InitiateCheckedReplication()
-		return
+			hashInfo, ok := packet.Payload.(networking.HashInfo)
+			if !ok {
+				c.VerbosePrintln("invalid payload for type for HashInfo")
+				c.InitiateCheckedReplication()
+				return
+			}
+
+			// Read the block data from the device
+			buf := make([]byte, hashInfo.Size)
+			if _, err := c.UnderDevFile.ReadAt(buf, int64(hashInfo.Offset)); err != nil && err != io.EOF {
+				c.VerbosePrintln("Error while hashing...")
+				c.InitiateCheckedReplication()
+				return
+			}
+
+			// Compute SHA-256 hash of the block
+			shaWriter := simdsha256.New()
+			shaWriter.Write(buf)
+			hash := shaWriter.Sum(nil)
+
+			// Compare hashes
+			if !bytes.Equal(hash[:], hashInfo.Hash[:]) {
+				c.DebugPrintln("Blocks are not equal")
+				// Send the correct block data if hashes don't match
+				c.sendCorrectBlock(buf, hashInfo.Offset, hashInfo.Size)
+				return
+			}
+
+			c.DebugPrintln("Blocks are equal...")
+		}()
 	}
-
-	// Read the block data from the device
-	buf := make([]byte, hashInfo.Size)
-	if _, err := c.UnderDevFile.ReadAt(buf, int64(hashInfo.Offset)); err != nil && err != io.EOF {
-		c.VerbosePrintln("Error while hashing...")
-		c.InitiateCheckedReplication()
-		return
-	}
-
-	// Compute SHA-256 hash of the block
-	shaWriter := simdsha256.New()
-	shaWriter.Write(buf)
-	hash := shaWriter.Sum(nil)
-
-	// Compare hashes
-	if !bytes.Equal(hash[:], hashInfo.Hash[:]) {
-		c.DebugPrintln("Blocks are not equal")
-		// Send the correct block data if hashes don't match
-		c.sendCorrectBlock(buf, hashInfo.Offset, hashInfo.Size)
-		return
-	}
-
-	c.DebugPrintln("Blocks are equal...")
+	hashWg.Wait()
 }
 
 // NewClient creates and initializes a new client instance
@@ -526,7 +534,6 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 		// Check if there are new writes to process
 		newWrites := bufferInfo.HasNewWrites()
 		if !newWrites {
-			c.DebugPrintln("No information available, waiting...")
 			time.Sleep(PollInterval * time.Millisecond)
 			continue
 		}
@@ -572,9 +579,16 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 	defer c.MonitorPauseContr.Resume()
 	defer hashWg.Wait()
 
+	hashQueue := make(chan *networking.Packet, 8)
+	defer close(hashQueue)
 	// Process the first hash packet
 	hashWg.Add(1)
-	go c.handleHashPacket(packet, &hashWg)
+	go func() {
+		defer hashWg.Done()
+		c.handleHashPacket(hashQueue, &hashWg)
+	}()
+
+	hashQueue <- packet
 
 	// Process additional hash packets until complete
 	for {
@@ -593,8 +607,7 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 			c.Println("ERROR: Remote and local devices do not have the same size.")
 		case networking.PacketTypeHash:
 			// Process each hash packet in parallel
-			hashWg.Add(1)
-			go c.handleHashPacket(packet, &hashWg)
+			hashQueue <- packet
 		case networking.PacketTypeHashError:
 			c.VerbosePrintln("ERROR: error occured on the remote side while hashing, retrying...")
 		case networking.PacketTypeInfoHashingCompleted:
@@ -640,9 +653,9 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 // Run starts the client and handles graceful shutdown
 func (c *Client) Run() {
 	c.Println("Starting bdr client connected to", c.Config.IpAddress, "and port", c.Config.Port)
-	if c.Config.InitialReplication {
-		c.InitiateCheckedReplication()
-	}
+	//if c.Config.InitialReplication {
+	//	c.InitiateCheckedReplication()
+	//}
 
 	// Start goroutines with wait group for clean shutdown
 	var termWg sync.WaitGroup

@@ -171,9 +171,13 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 		err    error
 	}
 	
-	workChan := make(chan workItem, numWorkers*2)
-	resultChan := make(chan resultItem, numWorkers*2)
+	workChan := make(chan workItem, numWorkers)
+	resultChan := make(chan resultItem, numWorkers)
 	doneChan := make(chan struct{})
+
+	readSize := uint64(hashedSpace)
+
+	totalSize := s.ClientInfo.DeviceSize
 	
 	// Launch worker goroutines
 	var wg sync.WaitGroup
@@ -209,49 +213,69 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 		close(doneChan)
 	}()
 	
+
+	type readTask struct {
+		offset uint64
+	}
+
+	readTaskChan := make(chan readTask, numWorkers)
 	// Start a goroutine to read disk blocks and send to workers
 	go func() {
 		defer close(workChan)
-		
-		readOffset := uint64(0)
-		for {
+
+		var wg sync.WaitGroup
+		for rTask := range readTaskChan{
 			// Check for termination request
-			if utils.ChanHasTerminated(termChan) {
-				return
-			}
-			
-			// Create a new buffer for each read to avoid data races
-			buf := make([]byte, hashedSpace)
-			
-			// Read a block from the disk
-			n, err := s.TargetDevFd.ReadAt(buf, int64(readOffset))
-			if err != nil && err != io.EOF {
-				resultChan <- resultItem{
-					offset: readOffset,
-					err:    err,
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if utils.ChanHasTerminated(termChan) {
+					return
 				}
-				return
-			}
-			
-			// End of disk reached
-			if n == 0 {
-				break
-			}
-			
-			// Adjust buffer size if we read less than expected
-			if n < len(buf) {
-				buf = buf[:n]
-			}
-			
-			// Send work to a worker
-			workChan <- workItem{
-				offset: readOffset,
-				buffer: buf,
-			}
-			
-			// Move to next block
-			readOffset += uint64(n)
+				
+				// Create a new buffer for each read to avoid data races
+				buf := make([]byte, readSize)
+				
+				// Read a block from the disk
+				n, err := s.TargetDevFd.ReadAt(buf, int64(rTask.offset))
+				if err != nil && err != io.EOF {
+					resultChan <- resultItem{
+						offset: rTask.offset,
+						err:    err,
+					}
+					return
+				}
+				
+				// End of disk reached
+				if n == 0 {
+					return
+				}
+				
+				// Adjust buffer size if we read less than expected
+				if n < len(buf) {
+					buf = buf[:n]
+				}
+				
+				// Send work to a worker
+				workChan <- workItem{
+					offset: rTask.offset,
+					buffer: buf,
+				}
+			}()
 		}
+		wg.Wait()
+	}()
+
+	go func() {
+		for offset := uint64(0); offset < totalSize; offset += readSize {
+			// Check for termination request before queuing more work
+			if utils.ChanHasTerminated(termChan) {
+			    break
+			}
+			readTaskChan <- readTask{offset: offset}
+		}
+
+		close(readTaskChan)
 	}()
 	
 	// Process results and send to client
