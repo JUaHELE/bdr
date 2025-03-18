@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	HashedBlockSize = 10 // megabytes
-	HashedSpaceBase = 1024 * 1024 * 1
+	HashedBlockSize = 5 // megabytes
+	HashedSpaceBase = 1024 * 1024 * HashedBlockSize
 	HashSizeSha256 = 32 // size of hash in bytes
 )
 

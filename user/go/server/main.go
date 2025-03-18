@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 	"syscall"
-	"io"
 	"runtime"
+	"io"
 
 	simdsha256 "github.com/minio/sha256-simd"
 )

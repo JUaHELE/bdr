@@ -321,6 +321,11 @@ func (c *Client) handleHashPacket(hashChan chan *networking.Packet, wg *sync.Wai
 		go func (){
 			defer hashWg.Done()
 
+			if c.CheckTermination() {
+				c.VerbosePrintln("Terminating handle hash packet.")
+				return
+			}
+
 			hashInfo, ok := packet.Payload.(networking.HashInfo)
 			if !ok {
 				c.VerbosePrintln("invalid payload for type for HashInfo")
@@ -352,7 +357,6 @@ func (c *Client) handleHashPacket(hashChan chan *networking.Packet, wg *sync.Wai
 
 			c.DebugPrintln("Blocks are equal...")
 		}()
-
 	}
 	hashWg.Wait()
 
