@@ -572,6 +572,9 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 
 	workChan := make(chan workItem, numWorkers)
 	compChan := make(chan compItem, numWorkers)
+
+	hashTimer := benchmark.NewTimer("Hash processing")
+	totalBytesHashed := uint64(0)
 	
 	go func() {
 		defer close(workChan)
@@ -624,6 +627,8 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 						buffer: work.buffer,
 						hash: hash,
 					}
+
+					totalBytesHashed += uint64(work.hashInfo.Size)
 				}
 			}()
 		}
@@ -639,7 +644,9 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 			c.DebugPrintln("Blocks are equal...")
 		}
 	}
-
+	
+	elapsed := hashTimer.Stop()
+	c.Stats.RecordHashing(elapsed, totalBytesHashed)
 }
 
 // handleHashing manages the hash verification process

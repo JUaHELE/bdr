@@ -162,9 +162,6 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	// Number of worker goroutines to use
 	numWorkers := runtime.NumCPU()
 
-	hashTimer := benchmark.NewTimer("Full disk hashing")
-	totalBytesHashed := uint64(0)
-	
 	// Create work and result channels
 	type workItem struct {
 		offset uint64
@@ -189,6 +186,9 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	readSize := uint64(hashedSpace)
 
 	totalSize := s.ClientInfo.DeviceSize
+
+	hashTimer := benchmark.NewTimer("Full disk hashing")
+	totalBytesHashed := uint64(0)
 	
 	go func() {
 		for offset := uint64(0); offset < totalSize; offset += readSize {
