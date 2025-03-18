@@ -177,102 +177,19 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 		hash   []byte
 		err    error
 	}
+
+	type readTask struct {
+		offset uint64
+	}
 	
 	workChan := make(chan workItem, numWorkers)
 	resultChan := make(chan resultItem, numWorkers)
-	doneChan := make(chan struct{})
+	readTaskChan := make(chan readTask, numWorkers)
 
 	readSize := uint64(hashedSpace)
 
 	totalSize := s.ClientInfo.DeviceSize
 	
-	// Launch worker goroutines
-	var wg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for work := range workChan {
-				// Check for termination
-				if utils.ChanHasTerminated(termChan) {
-					return
-				}
-				
-				// Compute SHA-256 hash using SIMD-accelerated implementation
-				shaWriter := simdsha256.New()
-				shaWriter.Write(work.buffer)
-				hash := shaWriter.Sum(nil)
-				
-				resultChan <- resultItem{
-					offset: work.offset,
-					size:   uint32(len(work.buffer)),
-					hash:   hash,
-					err:    nil,
-				}
-			}
-		}()
-	}
-	
-	// Start a goroutine to close resultChan when all workers are done
-	go func() {
-		wg.Wait()
-		close(resultChan)
-		close(doneChan)
-	}()
-	
-
-	type readTask struct {
-		offset uint64
-	}
-
-	readTaskChan := make(chan readTask, numWorkers)
-	// Start a goroutine to read disk blocks and send to workers
-	go func() {
-		defer close(workChan)
-
-		var wg sync.WaitGroup
-		for rTask := range readTaskChan{
-			// Check for termination request
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if utils.ChanHasTerminated(termChan) {
-					return
-				}
-				
-				// Create a new buffer for each read to avoid data races
-				buf := make([]byte, readSize)
-				
-				// Read a block from the disk
-				n, err := s.TargetDevFd.ReadAt(buf, int64(rTask.offset))
-				if err != nil && err != io.EOF {
-					resultChan <- resultItem{
-						offset: rTask.offset,
-						err:    err,
-					}
-					return
-				}
-				
-				// End of disk reached
-				if n == 0 {
-					return
-				}
-				
-				// Adjust buffer size if we read less than expected
-				if n < len(buf) {
-					buf = buf[:n]
-				}
-				
-				// Send work to a worker
-				workChan <- workItem{
-					offset: rTask.offset,
-					buffer: buf,
-				}
-			}()
-		}
-		wg.Wait()
-	}()
-
 	go func() {
 		for offset := uint64(0); offset < totalSize; offset += readSize {
 			// Check for termination request before queuing more work
@@ -283,6 +200,87 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 		}
 
 		close(readTaskChan)
+	}()
+
+	// Start a goroutine to read disk blocks and send to workers
+	go func() {
+		defer close(workChan)
+
+		var wg sync.WaitGroup
+		for i := 0; i < numWorkers; i++ {
+			// Check for termination request
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for rTask := range readTaskChan {
+					if utils.ChanHasTerminated(termChan) {
+						return
+					}
+					
+					// Create a new buffer for each read to avoid data races
+					buf := make([]byte, readSize)
+					
+					// Read a block from the disk
+					n, err := s.TargetDevFd.ReadAt(buf, int64(rTask.offset))
+					if err != nil && err != io.EOF {
+						resultChan <- resultItem{
+							offset: rTask.offset,
+							err:    err,
+						}
+						return
+					}
+					
+					// End of disk reached
+					if n == 0 {
+						return
+					}
+					
+					// Adjust buffer size if we read less than expected
+					if n < len(buf) {
+						buf = buf[:n]
+					}
+					
+					// Send work to a worker
+					workChan <- workItem{
+						offset: rTask.offset,
+						buffer: buf,
+					}
+				}
+			}()
+		}
+		wg.Wait()
+	}()
+
+	// Launch worker goroutines
+	go func() {
+		defer close(resultChan)
+
+		var wg sync.WaitGroup
+		for i := 0; i < numWorkers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for work := range workChan {
+					// Check for termination
+					if utils.ChanHasTerminated(termChan) {
+						return
+					}
+					
+					// Compute SHA-256 hash using SIMD-accelerated implementation
+					shaWriter := simdsha256.New()
+					shaWriter.Write(work.buffer)
+					hash := shaWriter.Sum(nil)
+					
+					resultChan <- resultItem{
+						offset: work.offset,
+						size:   uint32(len(work.buffer)),
+						hash:   hash,
+						err:    nil,
+					}
+				}
+			}()
+		}
+		wg.Wait()
 	}()
 	
 	// Process results and send to client
@@ -328,9 +326,6 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 		totalBytesHashed += uint64(result.size)
 	}
 	
-	// Wait for everything to finish
-	<-doneChan
-
 	elapsed := hashTimer.Stop()
 	s.Stats.RecordHashing(elapsed, totalBytesHashed)
 	
@@ -511,7 +506,6 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	// Queue for write operations
 	writeQueue := make(chan *networking.Packet, WritePacketQueueSize)
 	defer close(writeQueue)
-
 
 	// Start a goroutine to handle write operations
 	childWg.Add(1)

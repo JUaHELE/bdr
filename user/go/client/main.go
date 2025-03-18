@@ -17,6 +17,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"runtime"
 	"unsafe"
 
 	simdsha256 "github.com/minio/sha256-simd"
@@ -66,6 +67,7 @@ type Client struct {
 var (
 	// Buffer state flags
 	BufferOverflownFlag = utils.Bit(0) // Flag indicating buffer overflow has occurred
+	HashQueueSize = 8
 )
 
 const (
@@ -307,61 +309,6 @@ func (c *Client) sendCorrectBlock(buf []byte, offset uint64, size uint32) {
 
 	// Send the packet
 	c.sendPacket(correctBlockPacket)
-}
-
-// handleHashPacket processes a hash verification packet
-func (c *Client) handleHashPacket(hashChan chan *networking.Packet, wg *sync.WaitGroup) {
-	var hashWg sync.WaitGroup
-	hashTimer := benchmark.NewTimer("Hash processing")
-	totalBytes := uint64(0)
-	
-	for packet := range hashChan {
-		// Extract hash info from packet
-		hashWg.Add(1)
-		go func (){
-			defer hashWg.Done()
-
-			if c.CheckTermination() {
-				c.VerbosePrintln("Terminating handle hash packet.")
-				return
-			}
-
-			hashInfo, ok := packet.Payload.(networking.HashInfo)
-			if !ok {
-				c.VerbosePrintln("invalid payload for type for HashInfo")
-				c.InitiateCheckedReplication()
-				return
-			}
-
-			// Read the block data from the device
-			buf := make([]byte, hashInfo.Size)
-			if _, err := c.UnderDevFile.ReadAt(buf, int64(hashInfo.Offset)); err != nil && err != io.EOF {
-				c.VerbosePrintln("Error while hashing...")
-				c.InitiateCheckedReplication()
-				return
-			}
-
-			totalBytes += uint64(hashInfo.Size)
-			// Compute SHA-256 hash of the block
-			shaWriter := simdsha256.New()
-			shaWriter.Write(buf)
-			hash := shaWriter.Sum(nil)
-
-			// Compare hashes
-			if !bytes.Equal(hash[:], hashInfo.Hash[:]) {
-				c.DebugPrintln("Blocks are not equal")
-				// Send the correct block data if hashes don't match
-				c.sendCorrectBlock(buf, hashInfo.Offset, hashInfo.Size)
-				return
-			}
-
-			c.DebugPrintln("Blocks are equal...")
-		}()
-	}
-	hashWg.Wait()
-
-	elapsed := hashTimer.Stop()
-	c.Stats.RecordHashing(elapsed, totalBytes)
 }
 
 func (c *Client) StartStatsPrinting(interval time.Duration) {
@@ -607,23 +554,109 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 	}
 }
 
+func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.WaitGroup) {
+	defer hashWg.Done()
+
+	numWorkers := runtime.NumCPU()
+
+	type workItem struct {
+		hashInfo networking.HashInfo
+		buffer []byte
+	}
+
+	type compItem struct {
+		hashInfo networking.HashInfo
+		buffer []byte
+		hash []byte
+	}
+
+	workChan := make(chan workItem, numWorkers)
+	compChan := make(chan compItem, numWorkers)
+	
+	go func() {
+		defer close(workChan)
+
+		var wg sync.WaitGroup
+		for i := 0; i < numWorkers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				for packet := range hashChan {
+					hashInfo, ok := packet.Payload.(networking.HashInfo)
+					if !ok {
+						c.VerbosePrintln("invalid payload for type for HashInfo")
+						c.InitiateCheckedReplication()
+					}
+
+					buf := make([]byte, hashInfo.Size)
+					if _, err := c.UnderDevFile.ReadAt(buf, int64(hashInfo.Offset)); err != nil && err != io.EOF {
+						c.VerbosePrintln("Error while reading the disk...")
+						c.InitiateCheckedReplication()
+					}
+
+					workChan <- workItem{
+						hashInfo: hashInfo,
+						buffer: buf,
+					}
+				}
+			}()
+		}
+		wg.Wait()
+	}()
+
+	go func() {
+		defer close(compChan)
+
+		var wg sync.WaitGroup
+		for i := 0; i < numWorkers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				for work := range workChan {
+					shaWriter := simdsha256.New()
+					shaWriter.Write(work.buffer)
+					hash := shaWriter.Sum(nil)
+					
+					compChan <- compItem{
+						hashInfo: work.hashInfo,
+						buffer: work.buffer,
+						hash: hash,
+					}
+				}
+			}()
+		}
+		wg.Wait()
+	}()
+
+	for comp := range compChan {
+		if !bytes.Equal(comp.hash[:], comp.hashInfo.Hash[:]) {
+			c.DebugPrintln("Blocks are not equal")
+			// Send the correct block data if hashes don't match
+			c.sendCorrectBlock(comp.buffer, comp.hashInfo.Offset, comp.hashInfo.Size)
+		} else {
+			c.DebugPrintln("Blocks are equal...")
+		}
+	}
+
+}
+
 // handleHashing manages the hash verification process
 func (c *Client) handleHashing(packet *networking.Packet) {
 	c.DebugPrintln("Starting hashing phase...")
-	var hashWg sync.WaitGroup
 	defer c.MonitorPauseContr.Resume()
+
+	var hashWg sync.WaitGroup
 	defer hashWg.Wait()
 
-	hashQueue := make(chan *networking.Packet, 8)
+	hashQueue := make(chan *networking.Packet, HashQueueSize)
 	defer close(hashQueue)
-	// Process the first hash packet
-	hashWg.Add(1)
-	go func() {
-		defer hashWg.Done()
-		c.handleHashPacket(hashQueue, &hashWg)
-	}()
 
 	hashQueue <- packet
+
+	hashWg.Add(1)
+	go c.initHashing(hashQueue, &hashWg)
 
 	// Process additional hash packets until complete
 	for {
@@ -645,6 +678,8 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 			// Process each hash packet in parallel
 			hashQueue <- packet
 		case networking.PacketTypeHashError:
+			c.InitiateCheckedReplication()
+			return
 			c.VerbosePrintln("ERROR: error occured on the remote side while hashing, retrying...")
 		case networking.PacketTypeInfoHashingCompleted:
 			c.VerbosePrintln("Hashing completed packet received")
