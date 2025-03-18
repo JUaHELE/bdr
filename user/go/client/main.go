@@ -4,6 +4,7 @@ import (
 	"bdr/networking"
 	"bdr/pause"
 	"bdr/utils"
+	"bdr/benchmark"
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
@@ -59,6 +60,7 @@ type Client struct {
 	Buf               []byte                  // Shared buffer between kernel and userspace where writes will be saved
 	MonitorPauseContr *pause.PauseController  // Used to pause monitor changes function
 	TermChan          chan struct{}           // Termination channel for graceful shutdown
+	Stats *benchmark.BenchmarkStats
 }
 
 var (
@@ -171,7 +173,7 @@ func (c *Client) serveIOCTL(cmd uintptr, arg uintptr) {
 // reconnectToServer attempts to reestablish a connection to the server
 func (c *Client) reconnectToServer(sendHashReq bool) {
 	c.VerbosePrintln("Trying to reconnect to the server.")
-
+	c.Stats.RecordReconnection()
 	// Close existing connection if any
 	if c.Conn != nil {
 		c.Conn.Close()
@@ -310,6 +312,9 @@ func (c *Client) sendCorrectBlock(buf []byte, offset uint64, size uint32) {
 // handleHashPacket processes a hash verification packet
 func (c *Client) handleHashPacket(hashChan chan *networking.Packet, wg *sync.WaitGroup) {
 	var hashWg sync.WaitGroup
+	hashTimer := benchmark.NewTimer("Hash processing")
+	totalBytes := uint64(0)
+	
 	for packet := range hashChan {
 		// Extract hash info from packet
 		hashWg.Add(1)
@@ -331,6 +336,7 @@ func (c *Client) handleHashPacket(hashChan chan *networking.Packet, wg *sync.Wai
 				return
 			}
 
+			totalBytes += uint64(hashInfo.Size)
 			// Compute SHA-256 hash of the block
 			shaWriter := simdsha256.New()
 			shaWriter.Write(buf)
@@ -346,8 +352,31 @@ func (c *Client) handleHashPacket(hashChan chan *networking.Packet, wg *sync.Wai
 
 			c.DebugPrintln("Blocks are equal...")
 		}()
+
 	}
 	hashWg.Wait()
+
+	elapsed := hashTimer.Stop()
+	c.Stats.RecordHashing(elapsed, totalBytes)
+}
+
+func (c *Client) StartStatsPrinting(interval time.Duration) {
+	if c.Config.Benchmark == false {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				c.Stats.PrintStats()
+			case <-c.TermChan:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
 }
 
 // NewClient creates and initializes a new client instance
@@ -408,6 +437,7 @@ func NewClient(cfg *Config) (*Client, error) {
 		Buf:               buf,
 		MonitorPauseContr: monitorPauseContr,
 		TermChan:          make(chan struct{}),
+		Stats: benchmark.NewBenchmarkStats(cfg.Benchmark),
 	}, nil
 }
 
@@ -561,7 +591,8 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 
 				break
 			}
-
+			
+			c.Stats.RecordBufferOverflow()
 			// Initiate full device verification
 			c.InitiateCheckedReplication()
 			continue
@@ -668,6 +699,8 @@ func (c *Client) Run() {
 	termWg.Add(1)
 	go c.ListenPackets(&termWg)
 
+	c.StartStatsPrinting(5 * time.Second)
+
 	// Set up signal handling for graceful shutdown
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
@@ -683,6 +716,8 @@ func (c *Client) Run() {
 
 	// Clean up resources
 	c.CloseResources()
+
+	c.Stats.PrintStats()
 	c.Println("bdr client daemon terminated successfully.")
 }
 

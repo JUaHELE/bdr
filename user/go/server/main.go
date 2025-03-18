@@ -5,6 +5,7 @@ package main
 import (
 	"bdr/networking"
 	"bdr/utils"
+	"bdr/benchmark"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -53,6 +54,7 @@ type Server struct {
 	TermChan    chan struct{}          // channel for signaling termination
 	Connected   bool                   // flag indicating if a client is connected
 	ConnMutex   sync.Mutex             // mutex for thread-safe connection handling
+	Stats *benchmark.BenchmarkStats
 }
 
 // Println logs a message with standard priority
@@ -93,6 +95,7 @@ func NewServer(cfg *Config) (*Server, error) {
 		TargetDevFd: targetDeviceFd,
 		TermChan:    make(chan struct{}),
 		Connected:   false,
+		Stats: benchmark.NewBenchmarkStats(cfg.Benchmark),
 	}
 
 	return server, nil
@@ -158,12 +161,16 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	
 	// Number of worker goroutines to use
 	numWorkers := runtime.NumCPU()
+
+	hashTimer := benchmark.NewTimer("Full disk hashing")
+	totalBytesHashed := uint64(0)
 	
 	// Create work and result channels
 	type workItem struct {
 		offset uint64
 		buffer []byte
 	}
+
 	type resultItem struct {
 		offset uint64
 		size   uint32
@@ -317,10 +324,15 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 			s.sendPacket(&errPacket)
 			return
 		}
+
+		totalBytesHashed += uint64(result.size)
 	}
 	
 	// Wait for everything to finish
 	<-doneChan
+
+	elapsed := hashTimer.Stop()
+	s.Stats.RecordHashing(elapsed, totalBytesHashed)
 	
 	// Notify client that hashing is complete
 	s.CompleteHashing()
@@ -386,11 +398,32 @@ func (s *Server) handleWriteInfoPacket(writeChan chan *networking.Packet) {
 		writeOffset := int64(writeInfo.Sector) * int64(s.ClientInfo.SectorSize)
 		dataToWrite := writeInfo.Data[:writeInfo.Size]
 
+		s.Stats.RecordWrite(uint64(writeInfo.Size))
+
 		// Write data to the target device
 		if _, err := s.TargetDevFd.WriteAt(dataToWrite, writeOffset); err != nil {
 			s.VerbosePrintln("Failed to write data to device:", err)
 		}
 	}
+}
+
+func (s *Server) StartStatsPrinting(interval time.Duration) {
+	if s.Config.Benchmark == false {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				s.Stats.PrintStats()
+			case <-s.TermChan:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
 }
 
 // WaitForInitInfo waits for and processes the initialization information from the client
@@ -452,10 +485,14 @@ func (s *Server) handleCorrectPacket(packet *networking.Packet) {
 		s.VerbosePrintln("invalid packet type for correctblock")
 	}
 	
-	// Write the correct data to disk
-	if _, err := s.TargetDevFd.WriteAt(correctInfo.Data, int64(correctInfo.Offset)); err != nil {
-		s.VerbosePrintln("Can't write correct block")
-		// TODO: solve this - maybe ask for it again
+	for {
+		// Write the correct data to disk
+		if _, err := s.TargetDevFd.WriteAt(correctInfo.Data, int64(correctInfo.Offset)); err != nil {
+			s.VerbosePrintln("Can't write correct block")
+			RetrySleep()
+			continue
+		}
+		break
 	}
 }
 
@@ -466,6 +503,8 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 
 	s.Println("Accepted connection from", s.Conn.RemoteAddr())
 
+	var childWg sync.WaitGroup
+	childWg.Wait()
 	// Channel to signal hashing process termination
 	hashingTermChan := make(chan struct{})
 
@@ -473,7 +512,6 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	writeQueue := make(chan *networking.Packet, WritePacketQueueSize)
 	defer close(writeQueue)
 
-	var childWg sync.WaitGroup
 
 	// Start a goroutine to handle write operations
 	childWg.Add(1)
@@ -598,6 +636,8 @@ func (s *Server) Run() {
 	var termWg sync.WaitGroup
 	termWg.Add(1)
 	go s.HandleConnections(&termWg)
+
+	s.StartStatsPrinting(10 * time.Second)
 
 	// Set up signal handling for graceful shutdown
 	signalChan := make(chan os.Signal, 1)

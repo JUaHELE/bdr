@@ -18,6 +18,7 @@ const (
 	DefaultDebug              = false
 	DefaultNoPrint            = false
 	DefaultInitialReplication = false
+	DefaultBenchmark = false
 )
 
 // Config holds data passed by arguments
@@ -30,6 +31,7 @@ type Config struct {
 	Debug              bool   // includes debug prints to verbose
 	NoPrint            bool   // to prints except error messages
 	InitialReplication bool   // compares disks if they are the same by doing checksums of blocks
+	Benchmark bool
 }
 
 /* validate arguments that are passed in the program */
@@ -99,6 +101,7 @@ func NewConfig() *Config {
 	flag.BoolVar(&cfg.Debug, "debug", DefaultDebug, "Provides debug output of the program")
 	flag.BoolVar(&cfg.NoPrint, "noprint", DefaultNoPrint, "Disables prints")
 	flag.BoolVar(&cfg.InitialReplication, "noreplication", DefaultInitialReplication, "Disables replication when started")
+	flag.BoolVar(&cfg.Benchmark, "benchmark", DefaultBenchmark, "Enables benchmark info")
 	flag.Parse()
 
 	cfg.InitialReplication = !cfg.InitialReplication

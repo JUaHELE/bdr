@@ -15,6 +15,7 @@ const (
 	DefaultVerbose          = false
 	DefaultDebug            = false
 	DefaultNoPrint          = false
+	DefaultBenchmark = false
 )
 
 type Config struct {
@@ -24,6 +25,7 @@ type Config struct {
 	Verbose       bool
 	Debug         bool
 	NoPrint       bool
+	Benchmark bool
 }
 
 func ValidateArgs(targetDevicePath *string, port *int, ipAddress *string) error {
@@ -87,6 +89,7 @@ func NewConfig() *Config {
 	flag.BoolVar(&cfg.Verbose, "verbose", DefaultVerbose, "Provides verbose output of the program")
 	flag.BoolVar(&cfg.Debug, "debug", DefaultDebug, "Provides debug output of the program")
 	flag.BoolVar(&cfg.NoPrint, "noprint", DefaultNoPrint, "Disables prints")
+	flag.BoolVar(&cfg.Benchmark, "benchmark", DefaultBenchmark, "Enables benchmark")
 	flag.Parse()
 	return cfg
 }
