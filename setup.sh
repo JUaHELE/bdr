@@ -1,6 +1,11 @@
 #!/bin/bash
 set -eou pipefail
 
+if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root to create BDR mapper." >&2
+    exit 1
+fi
+
 # Constants
 WRITE_SIZE=4104  # Size of one write in bytes
 
@@ -37,9 +42,9 @@ convert_to_writes() {
     echo $writes
 }
 
-read -p "Enter target name (name of the device in /dev/mapper): " target_name
-read -p "Enter device unmouned (e.g., /dev/loop0, /dev/sdb2): " device
-read -p "Enter character device name (any, but advised similar to target name): " chardev_name
+read -p "Enter how you want to name your mapper (name of the device in /dev/mapper): " target_name
+read -p "Enter replicated device (e.g., /dev/loop0, /dev/sdb2): " device
+read -p "Enter character device name (any, but advised similar to mapper name): " chardev_name
 
 # Ask for buffer size with unit and convert to writes
 read -p "Enter buffer size (e.g., 4104, 8K, 1M): " buffer_size_input
@@ -56,5 +61,5 @@ echo "0 $(blockdev --getsz $device) bdr $device $chardev_name $buffer_size_in_wr
     sudo dmsetup create "$target_name" || \
     error_exit "Can't create target '$target_name' on '$device' with character device '$chardev_name' and buffer size $buffer_size_in_writes. Probably name collision or bdr module isn't loaded."
 
-echo "Device Mapper target '$target_name' on '$device' with character device '$chardev_name' and buffer size $buffer_size_in_writes created successfully. Your device is available /dev/mapper/$target_name"
+echo "Device Mapper target '$target_name' on '$device' with character device '/dev/$chardev_name' and buffer size $buffer_size_in_writes created successfully. Your device is available /dev/mapper/$target_name"
 dmsetup ls

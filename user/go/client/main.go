@@ -636,6 +636,7 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 		switch packet.PacketType {
 		case networking.PacketTypeErrInit:
 			c.Println("ERROR: Remote and local devices do not have the same size.")
+			close(c.TermChan)
 		case networking.PacketTypeHash:
 			// Process each hash packet in parallel
 			hashQueue <- packet
@@ -668,6 +669,7 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 		switch packet.PacketType {
 		case networking.PacketTypeErrInit:
 			c.Println("ERROR: Remote and local devices do not have the same size.")
+			close(c.TermChan)
 		case networking.PacketTypeHash:
 			// Start hash verification mode
 			c.handleHashing(packet)
@@ -706,11 +708,14 @@ func (c *Client) Run() {
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
 	// Wait for interrupt signal
-	<-signalChan
+	select {
+	case <- signalChan:
+		c.Println("Interrupt signal received. Shutting down...")
+		close(c.TermChan)
+	case <- c.TermChan:
+	}
 
 	// Initiate graceful shutdown
-	c.Println("Interrupt signal received. Shutting down...")
-	close(c.TermChan)
 	c.CloseClientConn()
 	termWg.Wait()
 
