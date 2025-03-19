@@ -287,48 +287,57 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	}()
 	
 	// Process results and send to client
-	for result := range resultChan {
-		// Check for termination request
-		if utils.ChanHasTerminated(termChan) {
-			s.Println("Hashing has terminated!")
-			return
-		}
-		
-		// Handle errors
-		if result.err != nil {
-			s.VerbosePrintln("Error while hashing disk:", result.err)
-			// Notify client about the error
-			errPacket := networking.Packet{
-				PacketType: networking.PacketTypeHashError,
-			}
-			s.sendPacket(&errPacket)
-			return
-		}
-		
-		// Create hash information packet
-		hashInfo := networking.HashInfo{
-			Offset: result.offset,
-			Size:   result.size,
-			Hash:   result.hash,
-		}
-		hashPacket := networking.Packet{
-			PacketType: networking.PacketTypeHash,
-			Payload:    hashInfo,
-		}
-		
-		// Send hash to client
-		if err := s.Encoder.Encode(&hashPacket); err != nil {
-			s.VerbosePrintln("Error while sending complete hashing info:", err)
-			errPacket := networking.Packet{
-				PacketType: networking.PacketTypeHashError,
-			}
-			s.sendPacket(&errPacket)
-			return
-		}
 
-		totalBytesHashed += uint64(result.size)
+	var sendWg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		sendWg.Add(1)
+		go func() {
+			defer sendWg.Done()
+			for result := range resultChan {
+			// Check for termination request
+				if utils.ChanHasTerminated(termChan) {
+					s.Println("Hashing has terminated!")
+					return
+				}
+				
+				// Handle errors
+				if result.err != nil {
+					s.VerbosePrintln("Error while hashing disk:", result.err)
+					// Notify client about the error
+					errPacket := networking.Packet{
+						PacketType: networking.PacketTypeHashError,
+					}
+					s.sendPacket(&errPacket)
+					return
+				}
+				
+				// Create hash information packet
+				hashInfo := networking.HashInfo{
+					Offset: result.offset,
+					Size:   result.size,
+					Hash:   result.hash,
+				}
+				hashPacket := networking.Packet{
+					PacketType: networking.PacketTypeHash,
+					Payload:    hashInfo,
+				}
+				
+				// Send hash to client
+				if err := s.Encoder.Encode(&hashPacket); err != nil {
+					s.VerbosePrintln("Error while sending complete hashing info:", err)
+					errPacket := networking.Packet{
+						PacketType: networking.PacketTypeHashError,
+					}
+					s.sendPacket(&errPacket)
+					return
+				}
+
+				totalBytesHashed += uint64(result.size)
+			}
+		}()
 	}
-	
+	sendWg.Wait()
+
 	elapsed := hashTimer.Stop()
 	s.Stats.RecordHashing(elapsed, totalBytesHashed)
 	

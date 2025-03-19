@@ -635,16 +635,25 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 		wg.Wait()
 	}()
 
-	for comp := range compChan {
-		if !bytes.Equal(comp.hash[:], comp.hashInfo.Hash[:]) {
-			c.DebugPrintln("Blocks are not equal")
-			// Send the correct block data if hashes don't match
-			c.sendCorrectBlock(comp.buffer, comp.hashInfo.Offset, comp.hashInfo.Size)
-		} else {
-			c.DebugPrintln("Blocks are equal...")
-		}
+	var compWg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		compWg.Add(1)
+		go func() {
+			defer compWg.Done()
+
+			for comp := range compChan {
+				if !bytes.Equal(comp.hash[:], comp.hashInfo.Hash[:]) {
+					c.DebugPrintln("Blocks are not equal")
+					// Send the correct block data if hashes don't match
+					c.sendCorrectBlock(comp.buffer, comp.hashInfo.Offset, comp.hashInfo.Size)
+				} else {
+					c.DebugPrintln("Blocks are equal...")
+				}
+			}
+		}()
 	}
 	
+	compWg.Wait()
 	elapsed := hashTimer.Stop()
 	c.Stats.RecordHashing(elapsed, totalBytesHashed)
 }
