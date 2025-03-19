@@ -100,7 +100,7 @@ func NewServer(cfg *Config) (*Server, error) {
 
 	return server, nil
 }
-
+// TODO: perallelize sending also... On the other side too, for fast disks and slow networks
 // sendPacket sends a network packet, retrying until successful or terminated
 func (s *Server) sendPacket(packet *networking.Packet) {
 	for {
@@ -112,6 +112,9 @@ func (s *Server) sendPacket(packet *networking.Packet) {
 				return
 			}
 
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			s.VerbosePrintln("SendPacket failed: ", err)
 			RetrySleep()
 			continue
@@ -373,9 +376,6 @@ func (s *Server) CloseClientConn() {
 		s.Conn.Close()
 		s.Conn = nil
 	}
-
-	s.Encoder = nil
-	s.Decoder = nil
 }
 
 // handleWriteInfoPacket processes write requests from the client
