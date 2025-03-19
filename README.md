@@ -5,13 +5,6 @@ BDR (Block Device Replicator) is a real-time, network-based block device replica
 
 If the disk experiences high load and the client daemon cannot send new writes quickly enough, a complete disk scan is necessary. When the client daemon starts, it performs a full disk scan to ensure consistency. The initial scan can be turned off if you are sure that devices are identical (not advised).
 
-## Features
-- Real-time block-level replication
-- Kernel module for efficient write tracking
-- Userspace daemons for network communication
-- Support for configurable buffer sizes to optimize performance
-- Designed for Linux Kernel >= 6.8
-
 ## Requirements
 
 * GNU Make
@@ -51,17 +44,23 @@ go build -o bdr_server
 
 ### Setup the Device Target
 
-For this purpose, there is a `setup.sh` script in the `bdr` directory. If you want to manually create a device mapper target, the table has the structure:
-
-```
-underlying_device_path character_device_name buffer_size_in_writes
-```
-
-The buffer is a shared structure between the kernel and userspace daemon, where the kernel places writes. One write structure is 4104 bytes long. It's up to you how large the buffer should be, but it's advised to set it to more than 50MB to prevent complete scans as much as possible.
+For this purpose, there is a `setup.sh` script in the `bdr` directory. If you want to manually create a device mapper target, you can do that with following command:
 
 ```bash
-./setup.sh
+echo "0 $(blockdev --getsz $underlying_device_path) bdr $underlying_device_path $character_device_name $buffer_size_in_writes" | sudo dmsetup create "$mapper_name"
 ```
+
+After successfull target setup you should see a character device at `/dev/$character_device_name` and device mapper at `/dev/$mapper_name`.
+
+You should now only communicate with the underlying device through the the mapper path, not the original `$underlying_device_path`
+
+The buffer is a shared structure between the kernel and userspace daemon, where the kernel places write information. One write structure is 4104 bytes long. It's up to you how large will you setup the buffer, but it's advised to set it to at least 1% of the capacity of the disk to prevent complete scans as much as possible.
+
+```bash
+sudo ./setup.sh
+```
+
+The `setup.sh` script has to run with root privileges, because of dmsetup
 
 ## Usage
 
@@ -80,11 +79,15 @@ The buffer is a shared structure between the kernel and userspace daemon, where 
     	Disables replication when started
   -port int
     	Receiver port
-  -underdev string
+  -mapperdev string
     	Path to underlying device, used only for reading (required)
   -verbose
     	Provides verbose output of the program
 ```
+
+To clarify `-chardev` path specifies character device created in target setup step (`/dev/$character_device_name`) and the `-mapperdev` specifies the mapper created in target setup step (`/dev/$mapper_name`).
+
+Client has to run with root privileges since it has to open character device and the mapper device. The mapper device is used only for reading the disk when full scanning
 
 ### Server Options
 
@@ -102,6 +105,8 @@ The buffer is a shared structure between the kernel and userspace daemon, where 
   -verbose
     	Provides verbose output of the program
 ```
+
+Server has to also run with root privileges because it has to open the target device specified by `-target` to propagate reads.
 
 ## Removal
 
