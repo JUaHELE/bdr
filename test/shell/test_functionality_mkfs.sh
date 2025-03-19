@@ -4,6 +4,8 @@ set -eou pipefail
 
 source ../utils/utils.sh
 
+check_root
+
 TMP_DIR=$(mktemp -d)
 
 TEST_NAME="\"Complete functionality basic\""
@@ -57,8 +59,7 @@ cleanup() {
 
     cleanup_targets $TARGET_NAME
 
-    log_info "Removing device-mapper target..."
-    sudo rmmod bdr 2>&1 > /dev/null || true
+    remove_driver
 
     rm -rf "$TMP_DIR"
 
@@ -78,7 +79,7 @@ if [[ ${#LOOP_DEVICES[@]} -ne 2 ]]; then
     error_exit "There should be only 2 loop devices, found ${#LOOP_DEVICES[@]}."
 fi
 
-CLIENT_ARGS="-chardev /dev/bdr-1 -underdev /dev/mapper/bdr-1 -address 127.0.0.1 -port 9832 -noprint"
+CLIENT_ARGS="-chardev /dev/bdr-1 -mapperdev /dev/mapper/bdr-1 -address 127.0.0.1 -port 9832 -noprint"
 SERVER_ARGS="-target ${LOOP_DEVICES[$LOOPDEV_ID]} -port 9832 -address 127.0.0.1 -noprint"
 
 compile_and_start_daemons() {

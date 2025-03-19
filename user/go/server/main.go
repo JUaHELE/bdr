@@ -100,7 +100,6 @@ func NewServer(cfg *Config) (*Server, error) {
 
 	return server, nil
 }
-// TODO: perallelize sending also... On the other side too, for fast disks and slow networks
 // sendPacket sends a network packet, retrying until successful or terminated
 func (s *Server) sendPacket(packet *networking.Packet) {
 	for {

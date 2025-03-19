@@ -18,14 +18,27 @@ error_exit() {
 
 make_driver() {
 	log_info "Compiling the kernel driver..."
-	make -C "$SRC_DIR" > /dev/null 2>&1 || error_exit "Failed to compile the source directory"
+	make -C "$SRC_DIR" &> /dev/null || error_exit "Failed to compile the source directory"
 }
 
 load_driver() {
-	log_info "Loading the driver into the kernel..."
-	if ! lsmod | grep -q bdr; then
-		sudo insmod "$SRC_DIR/bdr.ko" || error_exit "Failed to load the kernel driver"
+	log_info "Check if bdr module is loaded..."
+	if ! sudo lsmod | grep "bdr"; then
+		log_info "Loading the driver into the kernel..."
+		sudo insmod "$SRC_DIR/bdr.ko" &> /dev/null || error_exit "Failed to load the kernel driver"
 	fi
+}
+
+check_root() {
+	if [[ $EUID -ne 0 ]]; then
+		echo "This test script must be run as a root." >&2
+		exit 1
+	fi
+}
+
+remove_driver() {
+    log_info "Removing device-mapper target if not in use..."
+    sudo rmmod bdr  &> /dev/null || true
 }
 
 create_loop_device() {
@@ -59,7 +72,7 @@ create_targets() {
 		local loop_device=${LOOP_DEVICES[$i]}
 
 		local sector_count=$((size_mb * 2048))
-		echo "0 $sector_count $target_name $loop_device $target_name-$i $buffer_size_in_writes" | sudo dmsetup create $target_name-$i || error_exit "Can't create target $target_name-$i. Probably name collision."
+		echo "0 $sector_count $target_name $loop_device $target_name-$i $buffer_size_in_writes" | sudo dmsetup create $target_name-$i || error_exit "Can't create target $target_name-$i. Probably name collision. Or bdr module isn't loaded"
 
 		local backing_file="$TMP_DIR/loop$i.img"
 		log_info "$target_name target created on ${LOOP_DEVICES[$i]}"

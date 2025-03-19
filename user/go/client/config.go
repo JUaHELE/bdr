@@ -94,7 +94,7 @@ func NewConfig() *Config {
 	cfg := &Config{}
 
 	flag.StringVar(&cfg.CharDevicePath, "chardev", DefaultCharDevicePath, "Path to bdr character device")
-	flag.StringVar(&cfg.UnderDevicePath, "underdev", DefaultUnderDevicePath, "Path to underlying device, used for only for reading")
+	flag.StringVar(&cfg.UnderDevicePath, "mapperdev", DefaultUnderDevicePath, "Path to underlying device, used for only for reading")
 	flag.StringVar(&cfg.IpAddress, "address", DefaultIpAddress, "Receiver IP address")
 	flag.IntVar(&cfg.Port, "port", DefaultPort, "Receiver port")
 	flag.BoolVar(&cfg.Verbose, "verbose", DefaultVerbose, "Provides verbose output of the program")
