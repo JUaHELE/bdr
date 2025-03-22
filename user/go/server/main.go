@@ -3,21 +3,21 @@
 package main
 
 import (
+	"bdr/benchmark"
 	"bdr/networking"
 	"bdr/utils"
-	"bdr/benchmark"
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
-	"sync"
-	"time"
-	"syscall"
 	"runtime"
-	"io"
+	"sync"
+	"syscall"
+	"time"
 
 	simdsha256 "github.com/minio/sha256-simd"
 )
@@ -34,7 +34,8 @@ const (
 )
 
 const (
-	WritePacketQueueSize = 100 // number of writes that fit in the incoming queue; others wait
+	WritePacketQueueSize   = 100 // number of writes that fit in the incoming queue; others wait
+	CorrectPacketQueueSize = 10
 )
 
 // RetrySleep pauses execution for RetryInterval seconds
@@ -44,17 +45,17 @@ func RetrySleep() {
 
 // Server represents the main BDR (Block Device Replication) server
 type Server struct {
-	Config      *Config                // server configuration
-	Listener    net.Listener           // TCP listener for incoming connections
-	ClientInfo  *networking.InitInfo   // information about the connected client
-	Conn        net.Conn               // current client connection
-	Encoder     *gob.Encoder           // encoder for outgoing data
-	Decoder     *gob.Decoder           // decoder for incoming data
-	TargetDevFd *os.File               // file descriptor for the target block device
-	TermChan    chan struct{}          // channel for signaling termination
-	Connected   bool                   // flag indicating if a client is connected
-	ConnMutex   sync.Mutex             // mutex for thread-safe connection handling
-	Stats *benchmark.BenchmarkStats
+	Config      *Config              // server configuration
+	Listener    net.Listener         // TCP listener for incoming connections
+	ClientInfo  *networking.InitInfo // information about the connected client
+	Conn        net.Conn             // current client connection
+	Encoder     *gob.Encoder         // encoder for outgoing data
+	Decoder     *gob.Decoder         // decoder for incoming data
+	TargetDevFd *os.File             // file descriptor for the target block device
+	TermChan    chan struct{}        // channel for signaling termination
+	Connected   bool                 // flag indicating if a client is connected
+	ConnMutex   sync.Mutex           // mutex for thread-safe connection handling
+	Stats       *benchmark.BenchmarkStats
 }
 
 // Println logs a message with standard priority
@@ -95,11 +96,12 @@ func NewServer(cfg *Config) (*Server, error) {
 		TargetDevFd: targetDeviceFd,
 		TermChan:    make(chan struct{}),
 		Connected:   false,
-		Stats: benchmark.NewBenchmarkStats(cfg.Benchmark),
+		Stats:       benchmark.NewBenchmarkStats(cfg.Benchmark),
 	}
 
 	return server, nil
 }
+
 // sendPacket sends a network packet, retrying until successful or terminated
 func (s *Server) sendPacket(packet *networking.Packet) {
 	for {
@@ -160,7 +162,7 @@ func (s *Server) CompleteHashing() {
 // hashDiskAndSend reads the disk in chunks, computes SHA-256 hashes, and sends them to the client
 func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	s.VerbosePrintln("Hashing disk...")
-	
+
 	// Number of worker goroutines to use
 	numWorkers := runtime.NumCPU()
 
@@ -180,7 +182,7 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	type readTask struct {
 		offset uint64
 	}
-	
+
 	workChan := make(chan workItem, numWorkers)
 	resultChan := make(chan resultItem, numWorkers)
 	readTaskChan := make(chan readTask, numWorkers)
@@ -191,12 +193,12 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 
 	hashTimer := benchmark.NewTimer("Full disk hashing")
 	totalBytesHashed := uint64(0)
-	
+
 	go func() {
 		for offset := uint64(0); offset < totalSize; offset += readSize {
 			// Check for termination request before queuing more work
 			if utils.ChanHasTerminated(termChan) {
-			    break
+				break
 			}
 			readTaskChan <- readTask{offset: offset}
 		}
@@ -218,10 +220,10 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 					if utils.ChanHasTerminated(termChan) {
 						return
 					}
-					
+
 					// Create a new buffer for each read to avoid data races
 					buf := make([]byte, readSize)
-					
+
 					// Read a block from the disk
 					n, err := s.TargetDevFd.ReadAt(buf, int64(rTask.offset))
 					if err != nil && err != io.EOF {
@@ -231,17 +233,17 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 						}
 						return
 					}
-					
+
 					// End of disk reached
 					if n == 0 {
 						return
 					}
-					
+
 					// Adjust buffer size if we read less than expected
 					if n < len(buf) {
 						buf = buf[:n]
 					}
-					
+
 					// Send work to a worker
 					workChan <- workItem{
 						offset: rTask.offset,
@@ -267,12 +269,12 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 					if utils.ChanHasTerminated(termChan) {
 						return
 					}
-					
+
 					// Compute SHA-256 hash using SIMD-accelerated implementation
 					shaWriter := simdsha256.New()
 					shaWriter.Write(work.buffer)
 					hash := shaWriter.Sum(nil)
-					
+
 					resultChan <- resultItem{
 						offset: work.offset,
 						size:   uint32(len(work.buffer)),
@@ -284,7 +286,7 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 		}
 		wg.Wait()
 	}()
-	
+
 	// Process results and send to client
 
 	var sendWg sync.WaitGroup
@@ -293,12 +295,12 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 		go func() {
 			defer sendWg.Done()
 			for result := range resultChan {
-			// Check for termination request
+				// Check for termination request
 				if utils.ChanHasTerminated(termChan) {
 					s.Println("Hashing has terminated!")
 					return
 				}
-				
+
 				// Handle errors
 				if result.err != nil {
 					s.VerbosePrintln("Error while hashing disk:", result.err)
@@ -309,7 +311,7 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 					s.sendPacket(&errPacket)
 					return
 				}
-				
+
 				// Create hash information packet
 				hashInfo := networking.HashInfo{
 					Offset: result.offset,
@@ -320,7 +322,7 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 					PacketType: networking.PacketTypeHash,
 					Payload:    hashInfo,
 				}
-				
+
 				// Send hash to client
 				if err := s.Encoder.Encode(&hashPacket); err != nil {
 					s.VerbosePrintln("Error while sending complete hashing info:", err)
@@ -339,7 +341,7 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 
 	elapsed := hashTimer.Stop()
 	s.Stats.RecordHashing(elapsed, totalBytesHashed)
-	
+
 	// Notify client that hashing is complete
 	s.CompleteHashing()
 }
@@ -390,7 +392,7 @@ func (s *Server) CloseClientConn() {
 func (s *Server) handleWriteInfoPacket(writeChan chan *networking.Packet) {
 	for packet := range writeChan {
 		s.DebugPrintln("Write information packet received.")
-		
+
 		// Extract write information from the packet
 		writeInfo, ok := packet.Payload.(networking.WriteInfo)
 		if !ok {
@@ -411,7 +413,7 @@ func (s *Server) handleWriteInfoPacket(writeChan chan *networking.Packet) {
 }
 
 func (s *Server) StartStatsPrinting(interval time.Duration) {
-	if s.Config.Benchmark == false {
+	if !s.Config.Benchmark {
 		return
 	}
 
@@ -434,14 +436,14 @@ func (s *Server) WaitForInitInfo() error {
 	packet := &networking.Packet{}
 	if err := s.Decoder.Decode(packet); err != nil {
 		if err == io.EOF {
-			return fmt.Errorf("Connection closed by the client.")
+			return fmt.Errorf("connection closed by the client")
 		}
-		return fmt.Errorf("Failed to decode packet: %v", err)
+		return fmt.Errorf("failed to decode packet: %v", err)
 	}
 
 	// Verify that we received the expected packet type
 	if packet.PacketType != networking.PacketTypeInit {
-		return fmt.Errorf("Expected init packet, got: %d", packet.PacketType)
+		return fmt.Errorf("expected init packet, got: %d", packet.PacketType)
 	}
 
 	// Extract client information
@@ -470,7 +472,7 @@ func (s *Server) CheckValidSizes() bool {
 		if err != nil {
 			s.VerbosePrintln("Error when sending errInit packet")
 		}
-		s.Println("WARNING: Client has different size of the block device!")
+		s.Println("WARNING: Client has different size of the block device! Client: ", s.ClientInfo.DeviceSize, ", Server: ", deviceSize, "\n")
 		return false
 	} else {
 		s.VerbosePrintln("Client is acceptable.")
@@ -479,23 +481,31 @@ func (s *Server) CheckValidSizes() bool {
 }
 
 // handleCorrectPacket writes a correct block to the target device based on client information
-func (s *Server) handleCorrectPacket(packet *networking.Packet) {
-	s.DebugPrintln("Writing correct block...")
+func (s *Server) handleCorrectPacket(correctQueue chan *networking.Packet) {
+	numWorkers := runtime.NumCPU()
 
-	// Extract correct block information
-	correctInfo, ok := packet.Payload.(networking.CorrectBlockInfo)
-	if !ok {
-		s.VerbosePrintln("invalid packet type for correctblock")
-	}
-	
-	for {
-		// Write the correct data to disk
-		if _, err := s.TargetDevFd.WriteAt(correctInfo.Data, int64(correctInfo.Offset)); err != nil {
-			s.VerbosePrintln("Can't write correct block")
-			RetrySleep()
-			continue
-		}
-		break
+	for i := 0; i < numWorkers; i++ {
+		go func() {
+			for packet := range correctQueue {
+				s.DebugPrintln("Writing correct block...")
+
+				// Extract correct block information
+				correctInfo, ok := packet.Payload.(networking.CorrectBlockInfo)
+				if !ok {
+					s.VerbosePrintln("invalid packet type for correctblock")
+				}
+
+				for {
+					// Write the correct data to disk
+					if _, err := s.TargetDevFd.WriteAt(correctInfo.Data, int64(correctInfo.Offset)); err != nil {
+						s.VerbosePrintln("Can't write correct block")
+						RetrySleep()
+						continue
+					}
+					break
+				}
+			}
+		}()
 	}
 }
 
@@ -522,6 +532,14 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		s.handleWriteInfoPacket(writeQueue)
 	}()
 
+	correctQueue := make(chan *networking.Packet, CorrectPacketQueueSize)
+	defer close(correctQueue)
+
+	childWg.Add(1)
+	go func() {
+		defer childWg.Done()
+		s.handleCorrectPacket(correctQueue)
+	}()
 	// Wait for and process client initialization information
 	if err := s.WaitForInitInfo(); err != nil {
 		s.Println("Error occurred while waiting on init packet:", err)
@@ -568,11 +586,8 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		case networking.PacketTypeCorrectBlock:
 			// Process correct block
 			s.DebugPrintln("Correct block arrived")
-			childWg.Add(1)
-			go func() {
-				defer childWg.Done()
-				s.handleCorrectPacket(packet)
-			}()
+			correctQueue <- packet
+
 		default:
 			s.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}

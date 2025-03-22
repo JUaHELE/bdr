@@ -1,10 +1,10 @@
 package main
 
 import (
+	"bdr/benchmark"
 	"bdr/networking"
 	"bdr/pause"
 	"bdr/utils"
-	"bdr/benchmark"
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
@@ -14,10 +14,10 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
-	"runtime"
 	"unsafe"
 
 	simdsha256 "github.com/minio/sha256-simd"
@@ -51,23 +51,23 @@ type TargetInfo struct {
 
 // Client represents a BDR client instance
 type Client struct {
-	Config            *Config                 // Client configuration
-	TargetInfo        *TargetInfo             // Information about the target device
-	Conn              net.Conn                // Network connection to the server
-	Encoder           *gob.Encoder            // For encoding outgoing packets
-	Decoder           *gob.Decoder            // For decoding incoming packets
-	UnderDevFile      *os.File                // File handle for the underlying device 
-	CharDevFile       *os.File                // Path to character device used for communication with kernel
-	Buf               []byte                  // Shared buffer between kernel and userspace where writes will be saved
-	MonitorPauseContr *pause.PauseController  // Used to pause monitor changes function
-	TermChan          chan struct{}           // Termination channel for graceful shutdown
-	Stats *benchmark.BenchmarkStats
+	Config            *Config                // Client configuration
+	TargetInfo        *TargetInfo            // Information about the target device
+	Conn              net.Conn               // Network connection to the server
+	Encoder           *gob.Encoder           // For encoding outgoing packets
+	Decoder           *gob.Decoder           // For decoding incoming packets
+	UnderDevFile      *os.File               // File handle for the underlying device
+	CharDevFile       *os.File               // Path to character device used for communication with kernel
+	Buf               []byte                 // Shared buffer between kernel and userspace where writes will be saved
+	MonitorPauseContr *pause.PauseController // Used to pause monitor changes function
+	TermChan          chan struct{}          // Termination channel for graceful shutdown
+	Stats             *benchmark.BenchmarkStats
 }
 
 var (
 	// Buffer state flags
 	BufferOverflownFlag = utils.Bit(0) // Flag indicating buffer overflow has occurred
-	HashQueueSize = 8
+	HashQueueSize       = 8
 )
 
 const (
@@ -283,7 +283,7 @@ func (c *Client) SendInitPacket(device string) error {
 
 	packet := networking.Packet{
 		PacketType: networking.PacketTypeInit,
-		Payload: initPacket,
+		Payload:    initPacket,
 	}
 
 	// Send the initialization packet
@@ -297,14 +297,14 @@ func (c *Client) sendCorrectBlock(buf []byte, offset uint64, size uint32) {
 	// Create a correct block info packet
 	correctBlockInfo := &networking.CorrectBlockInfo{
 		Offset: offset,
-		Size: size,
-		Data: buf,
+		Size:   size,
+		Data:   buf,
 	}
 
 	// Wrap in a network packet
 	correctBlockPacket := &networking.Packet{
 		PacketType: networking.PacketTypeCorrectBlock,
-		Payload: correctBlockInfo,
+		Payload:    correctBlockInfo,
 	}
 
 	// Send the packet
@@ -312,7 +312,7 @@ func (c *Client) sendCorrectBlock(buf []byte, offset uint64, size uint32) {
 }
 
 func (c *Client) StartStatsPrinting(interval time.Duration) {
-	if c.Config.Benchmark == false {
+	if !c.Config.Benchmark {
 		return
 	}
 
@@ -388,7 +388,7 @@ func NewClient(cfg *Config) (*Client, error) {
 		Buf:               buf,
 		MonitorPauseContr: monitorPauseContr,
 		TermChan:          make(chan struct{}),
-		Stats: benchmark.NewBenchmarkStats(cfg.Benchmark),
+		Stats:             benchmark.NewBenchmarkStats(cfg.Benchmark),
 	}, nil
 }
 
@@ -542,7 +542,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 
 				break
 			}
-			
+
 			c.Stats.RecordBufferOverflow()
 			// Initiate full device verification
 			c.InitiateCheckedReplication()
@@ -561,13 +561,13 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 
 	type workItem struct {
 		hashInfo networking.HashInfo
-		buffer []byte
+		buffer   []byte
 	}
 
 	type compItem struct {
 		hashInfo networking.HashInfo
-		buffer []byte
-		hash []byte
+		buffer   []byte
+		hash     []byte
 	}
 
 	workChan := make(chan workItem, numWorkers)
@@ -575,7 +575,7 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 
 	hashTimer := benchmark.NewTimer("Hash processing")
 	totalBytesHashed := uint64(0)
-	
+
 	go func() {
 		defer close(workChan)
 
@@ -600,7 +600,7 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 
 					workChan <- workItem{
 						hashInfo: hashInfo,
-						buffer: buf,
+						buffer:   buf,
 					}
 				}
 			}()
@@ -621,11 +621,11 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 					shaWriter := simdsha256.New()
 					shaWriter.Write(work.buffer)
 					hash := shaWriter.Sum(nil)
-					
+
 					compChan <- compItem{
 						hashInfo: work.hashInfo,
-						buffer: work.buffer,
-						hash: hash,
+						buffer:   work.buffer,
+						hash:     hash,
 					}
 
 					totalBytesHashed += uint64(work.hashInfo.Size)
@@ -652,7 +652,7 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 			}
 		}()
 	}
-	
+
 	compWg.Wait()
 	elapsed := hashTimer.Stop()
 	c.Stats.RecordHashing(elapsed, totalBytesHashed)
@@ -694,9 +694,9 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 			// Process each hash packet in parallel
 			hashQueue <- packet
 		case networking.PacketTypeHashError:
+			c.VerbosePrintln("ERROR: error occured on the remote side while hashing, retrying...")
 			c.InitiateCheckedReplication()
 			return
-			c.VerbosePrintln("ERROR: error occured on the remote side while hashing, retrying...")
 		case networking.PacketTypeInfoHashingCompleted:
 			c.VerbosePrintln("Hashing completed packet received")
 			return
@@ -764,10 +764,10 @@ func (c *Client) Run() {
 
 	// Wait for interrupt signal
 	select {
-	case <- signalChan:
+	case <-signalChan:
 		c.Println("Interrupt signal received. Shutting down...")
 		close(c.TermChan)
-	case <- c.TermChan:
+	case <-c.TermChan:
 	}
 
 	// Initiate graceful shutdown
