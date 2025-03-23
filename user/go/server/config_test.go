@@ -68,19 +68,17 @@ func TestValidateArgs(t *testing.T) {
 			targetPath := tt.targetDevicePath
 			port := tt.port
 			ip := tt.ipAddress
-			
+
 			err := ValidateArgs(&targetPath, &port, &ip)
-			
+
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateArgs() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			
+
 			if tt.wantErr && !strings.Contains(err.Error(), tt.errorContains) {
 				t.Errorf("ValidateArgs() error = %v, should contain %v", err, tt.errorContains)
 			}
 		})
 	}
 }
-
-
