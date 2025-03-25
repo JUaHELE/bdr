@@ -2,6 +2,7 @@
 #define BDR_MAIN_H
 
 #include "ring-buffer.h"
+#include "bitmap.h"
 
 #define BDR_MAX_DEVICES 64
 
@@ -33,6 +34,9 @@ struct bdr_context {
 
 	/* state of the replication */
 	enum bdr_status status;
+
+	/* bitmap to track overflown sectors */
+	struct bdr_bitmap overflow_bm;
 };
 
 #endif

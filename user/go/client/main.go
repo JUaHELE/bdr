@@ -47,6 +47,7 @@ type TargetInfo struct {
 	PageSize       uint64 // Size of a memory page
 	WriteInfoSize  uint32 // Size of a write information structure
 	BufferByteSize uint64 // Total size of the buffer in bytes
+	BitmapByteSize  uint64 // Total size of overflow bitmap in bits
 }
 
 // Client represents a BDR client instance
@@ -130,6 +131,24 @@ func (c *Client) CheckTermination() bool {
 			return false
 		}
 	}
+}
+
+func (c *Client) ReadOverflowBitmap(bufferInfo *BufferInfo) ([]byte, error) {
+	c.ProcessBufferInfo(bufferInfo)
+	c.ResetBufferIOCTL()
+
+	bitmap := make([]byte, c.TargetInfo.BitmapByteSize)
+
+	n, err := c.CharDevFile.Read(bitmap)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to read bitmap: %v", err)
+	}
+
+	if uint64(n) != c.TargetInfo.BitmapByteSize {
+		return nil, fmt.Errorf("Partial read: %d of %d bytes", n, c.TargetInfo.BitmapByteSize)
+	}
+
+	return bitmap, nil
 }
 
 // ResetBufferIOCTL resets the buffer using an IOCTL command
@@ -497,6 +516,81 @@ func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 	}
 }
 
+func (c *Client) SpawnRepairWrokers(blockChan chan uint64, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	numWorkers := runtime.NumCPU()
+
+	type sendItem struct {
+		offset   uint64
+		buffer   []byte
+	}
+	sendChan := make(chan sendItem)
+
+	go func() {
+		defer close(sendChan)
+
+		var wg sync.WaitGroup
+		for i := 0; i < numWorkers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				for blockOff := range blockChan {
+					fileOff := (blockOff) * networking.RepairBlockSize
+					buf := make([]byte, networking.RepairBlockSize)
+					if _, err := c.UnderDevFile.ReadAt(buf, int64(fileOff)); err != nil && err != io.EOF {
+						c.VerbosePrintln("Error while reading the disk...")
+					}
+
+					sendChan <- sendItem{
+						offset: fileOff,
+						buffer:   buf,
+					}
+				}
+			}()
+		}
+		wg.Wait()
+	}()
+
+	var sendWg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		sendWg.Add(1)
+		go func() {
+			defer sendWg.Done()
+
+			for send := range sendChan {
+				c.sendCorrectBlock(send.buffer, send.offset, networking.RepairBlockSize)
+			}
+		}()
+	}
+	sendWg.Wait()
+}
+
+func (c *Client) StartRepair(bufferInfo *BufferInfo, bitmap []byte) {
+	c.VerbosePrintln("Repairing the disk...")
+
+	blockChan := make(chan uint64, 16)
+
+	var sendWg sync.WaitGroup
+	sendWg.Add(1)
+	go c.SpawnRepairWrokers(blockChan, &sendWg)
+
+	for i := uint64(0); i < c.TargetInfo.BitmapByteSize; i++ {
+		for j := 0; j < 8; j++ {
+			if (bitmap[i] & (1 << (7 - uint(j)))) != 0 {
+				c.DebugPrintln("Found changed block")
+				deviceOffMb := (i * 8) + uint64(j)
+				blockChan <- deviceOffMb
+			}
+		}
+	}
+	close(blockChan)
+
+	sendWg.Wait()
+	c.VerbosePrintln("Disk repaired.")
+}
+
 // MonitorChanges continuously monitors for changes to replicate
 func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 	defer wg.Done()
@@ -537,6 +631,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 				if newWrites {
 					// If new writes are occurring, wait before trying to verify
 					RetrySleep()
+					c.ResetBufferIOCTL()
 					continue
 				}
 

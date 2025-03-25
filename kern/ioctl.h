@@ -11,9 +11,10 @@ struct bdr_target_info {
 	u64 page_size;
 	u32 write_info_size;
 	u64 buffer_byte_size;
+	u64 bitmap_byte_size;
 };
 
-struct bdr_target_info bdr_get_target_info(struct bdr_ring_buffer *rb);
+struct bdr_target_info bdr_get_target_info(struct bdr_ring_buffer *rb, struct bdr_bitmap *bm);
 
 // IOCTL CONSTANTS
 #define BDR_MAGIC 'B'
@@ -25,5 +26,6 @@ struct bdr_target_info bdr_get_target_info(struct bdr_ring_buffer *rb);
 #define BDR_CMD_READ_BUFFER_INFO_WAIT _IOR(BDR_MAGIC, 6, struct bdr_buffer_info)
 #define BDR_CMD_RESET_BUFFER _IO(BDR_MAGIC, 7)
 #define BDR_CMD_WRITE_TEST_VALUE _IOW(BDR_MAGIC, 8, uint32_t)
+#define BDR_CMD_GET_BITMAP_INFO _IOR(BDR_MAGIC, 9, struct bdr_bitmap_info)
 
 #endif

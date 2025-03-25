@@ -113,8 +113,8 @@ func TestDeviceIoctls(t *testing.T) {
 			t.Error("BufferByteSize should not be 0")
 		}
 
-		t.Logf("TargetInfo: PageSize=%d, WriteInfoSize=%d, BufferByteSize=%d",
-			targetInfo.PageSize, targetInfo.WriteInfoSize, targetInfo.BufferByteSize)
+		t.Logf("TargetInfo: PageSize=%d, WriteInfoSize=%d, BufferByteSize=%d, BitmapByteSize=%d",
+			targetInfo.PageSize, targetInfo.WriteInfoSize, targetInfo.BufferByteSize, targetInfo.BitmapByteSize)
 	})
 
 	t.Run("GET_STATUS", func(t *testing.T) {

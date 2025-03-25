@@ -43,7 +43,7 @@ func ValidateArgs(charDevicePath *string, underDevicePath *string, ipAddress *st
 		missingArgs = append(missingArgs, "-chardev (character device path)")
 	}
 	if underDevicePath == nil || *underDevicePath == DefaultUnderDevicePath {
-		missingArgs = append(missingArgs, "-underdev (undelying device path)")
+		missingArgs = append(missingArgs, "-mapperdev (undelying device path)")
 	}
 	if ipAddress == nil || *ipAddress == DefaultIpAddress {
 		missingArgs = append(missingArgs, "-address (IP address)")

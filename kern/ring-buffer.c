@@ -149,19 +149,12 @@ struct bdr_buffer_info bdr_buffer_read_routine(struct bdr_ring_buffer *rb) {
 
 	is_full = buffer_info.flags & BDR_OVERFLOWN_BUFFER_FLAG;
 	
-	if (is_full) {
-		/* Reset the buffer if it's full */
-		rb->buffer_info.offset = 0;
-		rb->buffer_info.length = 0;
-		rb->buffer_info.last = 0;
-		rb->buffer_info.flags = 0;
-	} else {
-		/* Mark old data as read */
+	if (!is_full) {
 		rb->buffer_info.last = rb->buffer_info.offset;
 		rb->buffer_info.offset = (rb->buffer_info.offset + rb->buffer_info.length) % rb->buffer_info.max_writes;
 		rb->buffer_info.length = 0;
 	}
-	
+
 	spin_unlock(&rb->lock);
 	
 	return buffer_info;
@@ -175,7 +168,7 @@ void bdr_ring_buffer_read(struct bdr_ring_buffer *rb) {
 	spin_unlock(&rb->lock);
 }
 
-int bdr_ring_buffer_put(struct bdr_ring_buffer *rb, unsigned int sector, unsigned int size, struct page *page, unsigned int page_offset, unsigned int length)
+int bdr_ring_buffer_put(struct bdr_ring_buffer *rb, unsigned int sector, unsigned int size, struct page *page, unsigned int page_offset, unsigned int length, struct bdr_bitmap *bitmap)
 {
 	struct bdr_buffer_info buffer_info;
 	unsigned long buffer_offset;
@@ -193,13 +186,17 @@ int bdr_ring_buffer_put(struct bdr_ring_buffer *rb, unsigned int sector, unsigne
 
 	buffer_info = rb->buffer_info;
 	bdr_ring_buffer_update_unsafe(rb);
+
+	if (rb->buffer_info.flags & BDR_OVERFLOWN_BUFFER_FLAG) {
+		spin_unlock(&rb->lock);
+		return -ENOSPC;
+	}
+
 	spin_unlock(&rb->lock);
 
 	/* Calculate buffer offset and wrap around as needed */
 	buffer_offset = (buffer_info.offset + buffer_info.length) % rb->buffer_info.max_writes;
 	buffer_offset *= BDR_WRITE_INFO_SIZE;
-
-	pr_info("offset: %lu", buffer_offset);
 
 	/* Prepare target location in the ring buffer */
 	target_slot = (struct bdr_write_info *)(rb->buffer + buffer_offset);

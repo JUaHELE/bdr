@@ -1,6 +1,8 @@
 #ifndef BDR_RING_BUFFER_H
 #define BDR_RING_BUFFER_H
 
+#include "bitmap.h"
+
 /*
  * This header implements a ring buffer and differs a bit to suite my needs
  * bdr_ring_buffer loops around the within the buffer as normal circular buffer when putting
@@ -107,7 +109,7 @@ bdr_buffer_read_routine(struct bdr_ring_buffer *rb);
 /*
  * puts data into the buffer
  */
-int bdr_ring_buffer_put(struct bdr_ring_buffer *rb, unsigned int sector, unsigned int size, struct page *page, unsigned int page_offset, unsigned int length);
+int bdr_ring_buffer_put(struct bdr_ring_buffer *rb, unsigned int sector, unsigned int size, struct page *page, unsigned int page_offset, unsigned int length, struct bdr_bitmap *bitmap);
 
 /*
  * get size from the buffer

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"syscall"
 	"unsafe"
+	"strings"
 )
 
 func Bit(nr uint) uint32 { return 1 << nr }
@@ -116,3 +117,28 @@ func HexDump(data []byte) {
 		fmt.Println()
 	}
 }
+
+func PrintBitmap(bitmap []byte, maxBlocks uint64) string {
+	if maxBlocks == 0 || maxBlocks > uint64(len(bitmap)*8) {
+		maxBlocks = uint64(len(bitmap) * 8)
+	}
+
+	var builder strings.Builder
+	for i := uint64(0); i < maxBlocks; i++ {
+		byteIndex := i / 8
+		bitPosition := i % 8
+		
+		if (bitmap[byteIndex] & (1 << (7 - bitPosition))) != 0 {
+			builder.WriteRune('1')
+		} else {
+			builder.WriteRune('0')
+		}
+
+		if (i+1) % 64 == 0 && i+1 < maxBlocks {
+			builder.WriteRune(' ')
+		}
+	}
+
+	return builder.String()
+}
+

@@ -35,24 +35,6 @@ static struct bdr_bitmap bdr_minor_bitmap;
 /* if no new writes are available */
 static DECLARE_WAIT_QUEUE_HEAD(bdr_wait_queue);
 
-static void bdr_target_dtr(struct dm_target *ti)
-{
-	struct bdr_context *bc = (struct bdr_context*)ti->private;
-
-	bdr_bitmap_free(&bdr_minor_bitmap, MINOR(bc->chardev_num));
-
-	device_destroy(bdr_chardev_class, bc->chardev_num);
-	cdev_del(&bc->chardev);
-	unregister_chrdev_region(bc->chardev_num, 1);
-
-	dm_put_device(ti, bc->dev);
-
-	bdr_ring_buffer_free(&bc->ring_buf);
-
-	kfree(bc->chardev_name);
-	kfree(bc);
-}
-
 /*
  * mmaps ring buffer into the userspace
  */
@@ -118,6 +100,7 @@ static long bdr_chardev_ioctl(struct file *filp, unsigned int cmd, unsigned long
 {
 	struct bdr_context *bc = filp->private_data;
 	struct bdr_ring_buffer *rb = &bc->ring_buf;
+	struct bdr_bitmap *mb = &bc->overflow_bm;
 	struct bdr_buffer_info buffer_info;
 	struct bdr_target_info target_info;
 	enum bdr_status status;
@@ -132,7 +115,7 @@ static long bdr_chardev_ioctl(struct file *filp, unsigned int cmd, unsigned long
 		}
 		break;
 	case BDR_CMD_GET_TARGET_INFO:
-		target_info = bdr_get_target_info(rb);
+		target_info = bdr_get_target_info(rb, mb);
 		if (copy_to_user((void __user *)arg, &target_info, sizeof(target_info))) {
 			ret = -EFAULT;
 		}
@@ -183,6 +166,7 @@ static long bdr_chardev_ioctl(struct file *filp, unsigned int cmd, unsigned long
 		}
 
 		((char *)target_buffer)[offset] = 0xAA;
+		pr_info("Test value 0xAA written to mmaped buffer at offset: %iu\n", offset);
 		break;
 	default:
 		pr_warn("Ioctl not recognized: cmd=%u\n", cmd);
@@ -192,6 +176,35 @@ static long bdr_chardev_ioctl(struct file *filp, unsigned int cmd, unsigned long
 	return ret;
 }
 
+static ssize_t bdr_chardev_read(struct file *filp, char __user *buf, 
+                               size_t count, loff_t *f_pos)
+{
+	struct bdr_context *bc = filp->private_data;
+
+	if (!bc) {
+		pr_err("No context found for read\n");
+		return -EINVAL;
+	}
+
+	unsigned long bitmap_size = bdr_bitmap_get_byte_size(&bc->overflow_bm);
+	if (bitmap_size != count) {
+		pr_err("Bitmap size and requested bytes to read do not equal.");
+		return -EINVAL;
+	}
+
+	spin_lock(&bc->overflow_bm.lock);
+	bdr_bitmap_print(&bc->overflow_bm);
+	if (copy_to_user(buf, (char*)bc->overflow_bm.bitmap, bitmap_size)) {
+		spin_unlock(&bc->overflow_bm.lock);
+		return -EFAULT;
+	}
+	// reset the bitmap
+	memset(bc->overflow_bm.bitmap, 0, BITS_TO_LONGS(bc->overflow_bm.max_bits) * sizeof(unsigned long));
+	spin_unlock(&bc->overflow_bm.lock);
+
+	return bitmap_size;
+}
+
 /*
  * fops for character device
  */
@@ -199,6 +212,7 @@ static struct file_operations bdr_chardev_fops = {
 	.owner = THIS_MODULE,
 	.mmap = bdr_chardev_mmap,
 	.open = bdr_chardev_open,
+	.read = bdr_chardev_read,
 	.unlocked_ioctl = bdr_chardev_ioctl,
 };
 
@@ -239,8 +253,35 @@ err_add:
 err_device:
 	bdr_bitmap_free(&bdr_minor_bitmap, minor);
 
-
 	return ret;
+}
+
+/*
+ * removes character device
+ */
+static void bdr_chardev_destroy(struct bdr_context *bc)
+{
+	bdr_bitmap_free(&bdr_minor_bitmap, MINOR(bc->chardev_num));
+
+	device_destroy(bdr_chardev_class, bc->chardev_num);
+	cdev_del(&bc->chardev);
+	unregister_chrdev_region(bc->chardev_num, 1);
+}
+
+static void bdr_target_dtr(struct dm_target *ti)
+{
+	struct bdr_context *bc = (struct bdr_context*)ti->private;
+
+	bdr_chardev_destroy(bc);
+
+	dm_put_device(ti, bc->dev);
+
+	bdr_ring_buffer_free(&bc->ring_buf);
+
+	bdr_bitmap_destroy(&bc->overflow_bm);
+
+	kfree(bc->chardev_name);
+	kfree(bc);
 }
 
 /*
@@ -294,12 +335,22 @@ static int bdr_target_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto err_chardev;
 	}
 
+	sector_t device_size = get_capacity(bc->dev->bdev->bd_disk); // we get size in 512 bytes
+	unsigned long num_blocks = device_size >> BDR_BLOCK_SIZE_SHIFT;  // Divide by 2048 sectors to get 1M blocks
+	ret = bdr_bitmap_init(&bc->overflow_bm, num_blocks);
+	if (ret) {
+		goto err_bitmap;
+	}
+
 	ti->private = bc;
 
 	/* once the target loads it starts replicating immediately */
 	bc->status = ACTIVE;
 
 	return 0;
+
+err_bitmap:
+	bdr_chardev_destroy(bc);
 
 err_chardev:
 	bdr_ring_buffer_free(&bc->ring_buf);
@@ -318,8 +369,7 @@ err_get_dev:
 /*
  * copies write info to buffer
  */
-static void bdr_put_write_to_buffer(struct bdr_ring_buffer *rb, struct bio *bio, struct bio_vec *bvec, struct bvec_iter *iter) {
-
+static void bdr_put_write_to_buffer(struct bdr_ring_buffer *rb, struct bio *bio, struct bio_vec *bvec, struct bvec_iter *iter, struct bdr_bitmap *bitmap) {
 	unsigned int seg_len = bvec->bv_len;
 	unsigned int seg_page_off = bvec->bv_offset;
 	struct page *seg_page = bvec->bv_page;
@@ -328,7 +378,7 @@ static void bdr_put_write_to_buffer(struct bdr_ring_buffer *rb, struct bio *bio,
 	while (seg_len > 0) {
 		unsigned int size_to_copy = min(seg_len, PAGE_SIZE - seg_page_off);
 		
-		int ret = bdr_ring_buffer_put(rb, seg_sec, size_to_copy, seg_page, seg_page_off, seg_len);
+		int ret = bdr_ring_buffer_put(rb, seg_sec, size_to_copy, seg_page, seg_page_off, seg_len, bitmap);
 		if(ret)
 			return;
 
@@ -341,7 +391,7 @@ static void bdr_put_write_to_buffer(struct bdr_ring_buffer *rb, struct bio *bio,
 /*
  * puts writes into the buffer
  */
-static void bdr_submit_bio(struct bdr_ring_buffer *rb, struct bio *bio)
+static void bdr_submit_bio(struct bdr_ring_buffer *rb, struct bio *bio, struct bdr_bitmap *bitmap)
 {
 	struct bio_vec bvec;
 	struct bvec_iter iter;
@@ -349,7 +399,7 @@ static void bdr_submit_bio(struct bdr_ring_buffer *rb, struct bio *bio)
 	/* iterate through bvecs and send them to userspace */
 	bio_for_each_segment(bvec, bio, iter) {
 		/* write the page to shared buffer */
-		bdr_put_write_to_buffer(rb, bio, &bvec, &iter);
+		bdr_put_write_to_buffer(rb, bio, &bvec, &iter, bitmap);
 	}
 
 	wake_up_interruptible(&bdr_wait_queue);
@@ -366,8 +416,18 @@ static int bdr_target_map(struct dm_target *ti, struct bio *bio)
 	is_write = op_is_write(bio_op(bio));
 	buffer_overflow = bdr_ring_buffer_is_full(&bc->ring_buf);
 
-	if(is_write && !buffer_overflow) {
-		bdr_submit_bio(&bc->ring_buf, bio);
+	if(is_write) {
+		if (buffer_overflow) {
+			struct bio_vec bvec;
+			struct bvec_iter iter;
+
+			/* iterate through bvecs and send them to userspace */
+			bio_for_each_segment(bvec, bio, iter) {
+				bdr_bitmap_set_sector(&bc->overflow_bm, iter.bi_sector);
+			}
+		} else {
+			bdr_submit_bio(&bc->ring_buf, bio, &bc->overflow_bm);
+		}
 	}
 
 	/* change device to underlying */
