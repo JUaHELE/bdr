@@ -142,11 +142,6 @@ struct bdr_buffer_info bdr_buffer_read_routine(struct bdr_ring_buffer *rb) {
 	
 	buffer_info = rb->buffer_info;
 
-	if(buffer_info.length == 0) {
-		spin_unlock(&rb->lock);
-		return buffer_info;
-	}
-
 	is_full = buffer_info.flags & BDR_OVERFLOWN_BUFFER_FLAG;
 	
 	if (!is_full) {

@@ -127,7 +127,7 @@ func PrintBitmap(bitmap []byte, maxBlocks uint64) string {
 	for i := uint64(0); i < maxBlocks; i++ {
 		byteIndex := i / 8
 		bitPosition := i % 8
-		
+
 		if (bitmap[byteIndex] & (1 << (7 - bitPosition))) != 0 {
 			builder.WriteRune('1')
 		} else {

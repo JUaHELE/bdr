@@ -20,7 +20,7 @@ import (
 	"time"
 	"unsafe"
 
-	simdsha256 "github.com/minio/sha256-simd"
+	xxhash "github.com/cespare/xxhash"
 )
 
 // atomic_t provides atomic operation support for counters
@@ -74,11 +74,16 @@ var (
 const (
 	PollInterval  = 100 // Polling interval in milliseconds
 	RetryInterval = 1   // Retry interval in seconds
+	ReadInterval = 5
 )
 
 // RetrySleep pauses execution for the configured retry interval
 func RetrySleep() {
 	time.Sleep(RetryInterval * time.Second)
+}
+
+func ReadSleep() {
+	time.Sleep(ReadInterval * time.Second)
 }
 
 // Println prints a message with the configured verbosity level
@@ -133,6 +138,7 @@ func (c *Client) CheckTermination() bool {
 	}
 }
 
+// reads bitmap from kernel that represents modified blocks
 func (c *Client) ReadOverflowBitmap(bufferInfo *BufferInfo) ([]byte, error) {
 	c.ProcessBufferInfo(bufferInfo)
 	c.ResetBufferIOCTL()
@@ -618,6 +624,8 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 		if overflow {
 			c.VerbosePrintln("Buffer overflown...")
 
+			c.ResetBufferIOCTL()
+			ReadSleep()
 			// Wait until no new writes are occurring before starting verification
 			for {
 				if terminated := c.MonitorPauseContr.WaitIfPaused(c.TermChan); terminated {
@@ -626,11 +634,10 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 				}
 
 				c.serveIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
-
 				newWrites = bufferInfo.HasNewWrites()
 				if newWrites {
 					// If new writes are occurring, wait before trying to verify
-					RetrySleep()
+					ReadSleep()
 					c.ResetBufferIOCTL()
 					continue
 				}
@@ -662,7 +669,7 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 	type compItem struct {
 		hashInfo networking.HashInfo
 		buffer   []byte
-		hash     []byte
+		hash     uint64
 	}
 
 	workChan := make(chan workItem, numWorkers)
@@ -713,9 +720,7 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 				defer wg.Done()
 
 				for work := range workChan {
-					shaWriter := simdsha256.New()
-					shaWriter.Write(work.buffer)
-					hash := shaWriter.Sum(nil)
+					hash := xxhash.Sum64(work.buffer)
 
 					compChan <- compItem{
 						hashInfo: work.hashInfo,
@@ -737,7 +742,7 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 			defer compWg.Done()
 
 			for comp := range compChan {
-				if !bytes.Equal(comp.hash[:], comp.hashInfo.Hash[:]) {
+				if comp.hash != comp.hashInfo.Hash {
 					c.DebugPrintln("Blocks are not equal")
 					// Send the correct block data if hashes don't match
 					c.sendCorrectBlock(comp.buffer, comp.hashInfo.Offset, comp.hashInfo.Size)

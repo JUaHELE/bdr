@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	simdsha256 "github.com/minio/sha256-simd"
+	xxhash "github.com/cespare/xxhash"
 )
 
 // Connection and timing constants
@@ -175,7 +175,7 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	type resultItem struct {
 		offset uint64
 		size   uint32
-		hash   []byte
+		hash   uint64
 		err    error
 	}
 
@@ -269,11 +269,8 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 					if utils.ChanHasTerminated(termChan) {
 						return
 					}
-
 					// Compute SHA-256 hash using SIMD-accelerated implementation
-					shaWriter := simdsha256.New()
-					shaWriter.Write(work.buffer)
-					hash := shaWriter.Sum(nil)
+					hash := xxhash.Sum64(work.buffer)
 
 					resultChan <- resultItem{
 						offset: work.offset,

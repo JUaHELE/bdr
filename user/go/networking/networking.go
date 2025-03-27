@@ -49,7 +49,7 @@ type WriteInfo struct {
 type HashInfo struct {
 	Offset uint64
 	Size uint32
-	Hash []byte
+	Hash uint64
 }
 
 func (w WriteInfo) Print() {
