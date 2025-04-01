@@ -20,7 +20,7 @@ import (
 	"time"
 	"unsafe"
 
-	xxhash "github.com/cespare/xxhash"
+	xxhash "github.com/zeebo/xxh3"
 )
 
 // atomic_t provides atomic operation support for counters
@@ -611,7 +611,6 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 		// Get buffer information via IOCTL
 		var bufferInfo BufferInfo
 		c.serveIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
-
 		// Check if there are new writes to process
 		newWrites := bufferInfo.HasNewWrites()
 		if !newWrites {
@@ -637,8 +636,8 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 				newWrites = bufferInfo.HasNewWrites()
 				if newWrites {
 					// If new writes are occurring, wait before trying to verify
-					ReadSleep()
 					c.ResetBufferIOCTL()
+					ReadSleep()
 					continue
 				}
 
@@ -651,6 +650,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 			continue
 		}
 
+		
 		// Process the write operations in the buffer
 		c.ProcessBufferInfo(&bufferInfo)
 	}
@@ -720,7 +720,7 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 				defer wg.Done()
 
 				for work := range workChan {
-					hash := xxhash.Sum64(work.buffer)
+					hash := xxhash.Hash(work.buffer)
 
 					compChan <- compItem{
 						hashInfo: work.hashInfo,

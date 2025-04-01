@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	xxhash "github.com/cespare/xxhash"
+	xxhash "github.com/zeebo/xxh3"
 )
 
 // Connection and timing constants
@@ -34,8 +34,8 @@ const (
 )
 
 const (
-	WritePacketQueueSize   = 100 // number of writes that fit in the incoming queue; others wait
-	CorrectPacketQueueSize = 10
+	WritePacketQueueSize   = 8 // number of writes that fit in the incoming queue; others wait
+	CorrectPacketQueueSize = 8 // numbers are chosen not to overwhelm the disk
 )
 
 // RetrySleep pauses execution for RetryInterval seconds
@@ -270,7 +270,7 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 						return
 					}
 					// Compute SHA-256 hash using SIMD-accelerated implementation
-					hash := xxhash.Sum64(work.buffer)
+					hash := xxhash.Hash(work.buffer)
 
 					resultChan <- resultItem{
 						offset: work.offset,

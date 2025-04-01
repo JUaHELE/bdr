@@ -143,7 +143,7 @@ struct bdr_buffer_info bdr_buffer_read_routine(struct bdr_ring_buffer *rb) {
 	buffer_info = rb->buffer_info;
 
 	is_full = buffer_info.flags & BDR_OVERFLOWN_BUFFER_FLAG;
-	
+
 	if (!is_full) {
 		rb->buffer_info.last = rb->buffer_info.offset;
 		rb->buffer_info.offset = (rb->buffer_info.offset + rb->buffer_info.length) % rb->buffer_info.max_writes;
