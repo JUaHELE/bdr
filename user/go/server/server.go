@@ -406,6 +406,8 @@ func (s *Server) handleWriteInfoPacket(writeChan chan *networking.Packet) {
 		if _, err := s.TargetDevFd.WriteAt(dataToWrite, writeOffset); err != nil {
 			s.VerbosePrintln("Failed to write data to device:", err)
 		}
+
+		s.TargetDevFd.Sync()
 	}
 }
 
