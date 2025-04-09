@@ -3,10 +3,10 @@ package utils
 import (
 	"fmt"
 	"os"
-	"testing"
-	"syscall"
-	"unsafe"
 	"strings"
+	"syscall"
+	"testing"
+	"unsafe"
 )
 
 func Bit(nr uint) uint32 { return 1 << nr }
@@ -49,7 +49,6 @@ func ChanHasTerminated(termChan chan struct{}) bool {
 
 const BLKSSZGET = 0x1268
 
-
 func GetSectorSize(device string) (uint32, error) {
 	// Open the device file
 	file, err := os.Open(device)
@@ -69,7 +68,6 @@ func GetSectorSize(device string) (uint32, error) {
 
 	return sectorSize, nil
 }
-
 
 const BLKGETSIZE64 = 0x80081272
 
@@ -134,11 +132,10 @@ func PrintBitmap(bitmap []byte, maxBlocks uint64) string {
 			builder.WriteRune('0')
 		}
 
-		if (i+1) % 64 == 0 && i+1 < maxBlocks {
+		if (i+1)%64 == 0 && i+1 < maxBlocks {
 			builder.WriteRune(' ')
 		}
 	}
 
 	return builder.String()
 }
-
