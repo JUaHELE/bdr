@@ -36,7 +36,7 @@ func (c *CorrectBlockInfo) IsValid() bool {
 }
 
 var (
-	CorrectBlockByteSize = 8 + 4 + HashedSpaceBase
+	CorrectBlockByteSize = 8 + 4 + HashedSpaceBase // offset + size + hashed space
 )
 
 type InitInfo struct {

@@ -172,7 +172,6 @@ func ValidateJournal(diskPath string, journal *Journal) (bool, error) {
 	return journal.Equals(readJournal), nil
 }
 
-
 func OpenJournal(diskPath string) (*Journal, error) {
 	disk, err := os.OpenFile(diskPath, os.O_RDWR, 0644)
 	if err != nil {
@@ -253,6 +252,12 @@ func deserializeWriteInfo(buffer []byte) *networking.WriteInfo {
 	}
 	
 	return info
+}
+
+func (j *Journal) GetJournalCoverPercentage(targetDiskSize uint64) {
+	corrBlockCoverage := j.corrBlockByteSize * j.corrBlockByteSize
+
+	return corrBlockCoverage / targetDiskSize * 100
 }
 
 func NewJournal(diskPath string, sectionBufWritesSize uint64, bufWriteByteSize uint64, corrBlockByteSize uint64) (*Journal, error) {

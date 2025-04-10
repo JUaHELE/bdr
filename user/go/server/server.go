@@ -4,6 +4,7 @@ import (
 	"bdr/benchmark"
 	"bdr/networking"
 	"bdr/utils"
+	"bdr/journal"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -53,6 +54,7 @@ type Server struct {
 	TermChan    chan struct{}        // channel for signaling termination
 	Connected   bool                 // flag indicating if a client is connected
 	ConnMutex   sync.Mutex           // mutex for thread-safe connection handling
+	Journal *journal.Journal
 	Stats       *benchmark.BenchmarkStats
 }
 
@@ -505,6 +507,24 @@ func (s *Server) handleCorrectPacket(correctQueue chan *networking.Packet) {
 	}
 }
 
+
+func (s *Server) CreateJournal() error {
+	writeCount = s.ClientInfo.BufferByteSize / s.ClientInfo.WriteInfoSize
+
+	s.VerbosePrintln("Creating new journal at:", s.Config.JournalPath, "with buffer size in writes", writeCount)
+	jrn, err := journal.NewJournal(s.Config.JournalPath, s.ClientInfo.BufferByteSize, uint64(s.ClientInfo.WriteInfoSize), uint64(networking.CorrectBlockByteSize))
+	if err != nil {
+		return err
+	}
+
+	s.Journal = jrn
+
+	cover := jrn.GetJournalCoverPercentage(s.ClientInfo.DeviceSize)
+	s.VerbosePrintln("Journal covers", cover, " percent of the target disk")
+
+	return err
+}
+
 // HandleClient manages a connected client session
 func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	defer s.CloseClientConn()
@@ -528,14 +548,6 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		s.handleWriteInfoPacket(writeQueue)
 	}()
 
-	correctQueue := make(chan *networking.Packet, CorrectPacketQueueSize)
-	defer close(correctQueue)
-
-	childWg.Add(1)
-	go func() {
-		defer childWg.Done()
-		s.handleCorrectPacket(correctQueue)
-	}()
 	// Wait for and process client initialization information
 	if err := s.WaitForInitInfo(); err != nil {
 		s.Println("Error occurred while waiting on init packet:", err)
@@ -546,6 +558,15 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	if valid := s.CheckValidSizes(); !valid {
 		return
 	}
+
+	correctQueue := make(chan *networking.Packet, CorrectPacketQueueSize)
+	defer close(correctQueue)
+
+	childWg.Add(1)
+	go func() {
+		defer childWg.Done()
+		s.handleCorrectPacket(correctQueue)
+	}()
 
 	// Main packet processing loop
 	for {
@@ -674,7 +695,7 @@ func main() {
 	cfg := NewConfig()
 
 	// Validate command-line arguments
-	err := ValidateArgs(&cfg.TargetDevPath, &cfg.Port, &cfg.IpAddress)
+	err := ValidateArgs(&cfg.TargetDevPath, &cfg.Port, &cfg.IpAddress, &cfg.JournalPath)
 	if err != nil {
 		log.Fatalf("Invalid arguments: %v", err)
 	}
