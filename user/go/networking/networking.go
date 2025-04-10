@@ -41,7 +41,7 @@ func (i InitInfo) Print() {
 }
 
 type WriteInfo struct {
-	Sector uint32
+	Offset uint64
 	Size   uint32
 	Data   []byte
 }
@@ -53,7 +53,7 @@ type HashInfo struct {
 }
 
 func (w WriteInfo) Print() {
-	fmt.Printf("WriteInfo { Sector: %d, Size: %d, Data:... }\n", w.Sector, w.Size)
+	fmt.Printf("WriteInfo { Sector: %d, Size: %d, Data:... }\n", w.Offset, w.Size)
 }
 
 func (h HashInfo) Print() {

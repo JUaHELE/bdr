@@ -69,6 +69,7 @@ var (
 	// Buffer state flags
 	BufferOverflownFlag = utils.Bit(0) // Flag indicating buffer overflow has occurred
 	HashQueueSize       = 8
+	KernelLogicalSectorSize = 512 // Bytes
 )
 
 const (
@@ -474,8 +475,9 @@ func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 			var writeInfoPacket networking.WriteInfo
 			var err error
 
+			var sector uint64
 			// Read sector number
-			if err = binary.Read(reader, binary.LittleEndian, &writeInfoPacket.Sector); err != nil {
+			if err = binary.Read(reader, binary.LittleEndian, &sector); err != nil {
 				if terminated := c.CheckTermination(); terminated {
 					c.VerbosePrintln("Terminating attempt to process buffer info...")
 					return
@@ -484,6 +486,7 @@ func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 				RetrySleep()
 				continue
 			}
+			writeInfoPacket.Offset = uint64(KernelLogicalSectorSize) * sector;
 
 			// Read data size
 			if err = binary.Read(reader, binary.LittleEndian, &writeInfoPacket.Size); err != nil {

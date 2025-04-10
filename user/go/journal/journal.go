@@ -11,6 +11,10 @@ const (
 	BdrMagic = 0x4244525F52504C43
 )
 
+const (
+	JournalValidFlag = iota
+)
+
 var (
 	ErrInvalidMagic = errors.New("invalid magic bytes in journal header")
 	ErrInvalidSize  = errors.New("invalid section size")
@@ -22,11 +26,11 @@ type Header struct {
 
 	bufWriteByteSize uint64
 	bufWritesCount   uint64
-	bufWritesOffset  uint64
+	bufWritesStartOffset  uint64
 
 	corrBlockByteSize uint64
 	corrBlocksCount   uint64
-	corrBlocksOffset  uint64
+	corrBlocksStartOffset  uint64
 
 	flags uint64
 }
@@ -37,6 +41,14 @@ func (h *Header) GetBufWriteSectionByteSize() uint64 {
 
 func (h *Header) GetCorrBlockSectionByteSize() uint64 {
 	return h.corrBlockByteSize * h.corrBlocksCount
+}
+
+func (h *Header) SetValidFlag() {
+	
+}
+
+func (h *Header) IsValid() {
+	
 }
 
 func GetHeaderByteSize() uint64 {
@@ -64,12 +76,12 @@ func WriteHeader(disk *os.File, header *Header) error {
 	// Write the buffer write section information
 	binary.BigEndian.PutUint64(headerBytes[8:16], header.bufWriteByteSize)
 	binary.BigEndian.PutUint64(headerBytes[16:24], header.bufWritesCount)
-	binary.BigEndian.PutUint64(headerBytes[24:32], header.bufWritesOffset)
+	binary.BigEndian.PutUint64(headerBytes[24:32], header.bufWritesStartOffset)
 
 	// Write the correlation block section information
 	binary.BigEndian.PutUint64(headerBytes[32:40], header.corrBlockByteSize)
 	binary.BigEndian.PutUint64(headerBytes[40:48], header.corrBlocksCount)
-	binary.BigEndian.PutUint64(headerBytes[48:56], header.corrBlocksOffset)
+	binary.BigEndian.PutUint64(headerBytes[48:56], header.corrBlocksStartOffset)
 
 	// Write the flags
 	binary.BigEndian.PutUint64(headerBytes[56:64], header.flags)
@@ -101,18 +113,25 @@ func ReadHeader(disk *os.File) (*Header, error) {
 	header.magic = binary.BigEndian.Uint64(headerBytes[0:8])
 	header.bufWriteByteSize = binary.BigEndian.Uint64(headerBytes[8:16])
 	header.bufWritesCount = binary.BigEndian.Uint64(headerBytes[16:24])
-	header.bufWritesOffset = binary.BigEndian.Uint64(headerBytes[24:32])
+	header.bufWritesStartOffset = binary.BigEndian.Uint64(headerBytes[24:32])
+
 	header.corrBlockByteSize = binary.BigEndian.Uint64(headerBytes[32:40])
 	header.corrBlocksCount = binary.BigEndian.Uint64(headerBytes[40:48])
-	header.corrBlocksOffset = binary.BigEndian.Uint64(headerBytes[48:56])
+	header.corrBlocksStartOffset = binary.BigEndian.Uint64(headerBytes[48:56])
 	header.flags = binary.BigEndian.Uint64(headerBytes[56:64])
 
 	return header, nil
 }
 
-func ValidateJournal(journal *Journal) {
-	if !VerifyMagic(headerBytes) {
+func ValidateJournal(journal *Journal, ) {
+	if !VerifyMagic(journal.header.magic) {
 		return nil, ErrInvalidMagic
+	}
+
+	expectedSize := journal.header.bufWritesOffset + journal.header.GetBufWriteSectionByteSize() + journal.header.GetCorrBlockSectionByteSize()
+	if journal.diskSize < expectedSize {
+		disk.Close()
+		return nil, ErrInvalidSize
 	}
 }
 
@@ -137,11 +156,6 @@ func OpenJournal(diskPath string) (*Journal, error) {
 	diskSize := uint64(diskInfo.Size())
 
 	// Validate the disk size against header information
-	expectedSize := header.bufWritesOffset + header.GetBufWriteSectionByteSize() + header.GetCorrBlockSectionByteSize()
-	if diskSize < expectedSize {
-		disk.Close()
-		return nil, ErrInvalidSize
-	}
 
 	journal := &Journal{
 		disk:     disk,
@@ -178,11 +192,11 @@ func NewJournal(diskPath string, sectionBufWritesSize uint64, bufWriteByteSize u
 
 		bufWriteByteSize: bufWriteByteSize,
 		bufWritesCount:   sectionBufWritesSize / bufWriteByteSize,
-		bufWritesOffset:  headerSize,
+		bufWriteStartOffset:  headerSize,
 
 		corrBlockByteSize: corrBlockByteSize,
 		corrBlocksCount:   sectionCorBlocksSize / corrBlockByteSize,
-		corrBlocksOffset:  headerSize + sectionBufWritesSize,
+		corrBlocksStartOffset:  headerSize + sectionBufWritesSize,
 
 		flags: 0,
 	}

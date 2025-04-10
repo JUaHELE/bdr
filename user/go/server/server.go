@@ -397,13 +397,12 @@ func (s *Server) handleWriteInfoPacket(writeChan chan *networking.Packet) {
 		}
 
 		// Calculate disk offset based on sector number and size
-		writeOffset := int64(writeInfo.Sector) * int64(s.ClientInfo.SectorSize)
 		dataToWrite := writeInfo.Data[:writeInfo.Size]
 
 		s.Stats.RecordWrite(uint64(writeInfo.Size))
 
 		// Write data to the target device
-		if _, err := s.TargetDevFd.WriteAt(dataToWrite, writeOffset); err != nil {
+		if _, err := s.TargetDevFd.WriteAt(dataToWrite, int64(writeInfo.Offset)); err != nil {
 			s.VerbosePrintln("Failed to write data to device:", err)
 		}
 
