@@ -40,12 +40,13 @@ var (
 )
 
 type InitInfo struct {
-	SectorSize uint32
 	DeviceSize uint64
+	WriteInfoSize  uint32
+	BufferByteSize uint64
 }
 
 func (i InitInfo) Print() {
-	fmt.Printf("InitInfo { SectorSize: %d, DiskSize: %d }\n", i.SectorSize, i.DeviceSize)
+	fmt.Printf("InitInfo { DiskSize: %d, WriteInfoSize: %d, BufferByteSize: %d }\n", i.DeviceSize, i.WriteInfoSize, i.BufferByteSize)
 }
 
 type WriteInfo struct {

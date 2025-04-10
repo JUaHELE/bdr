@@ -1,7 +1,6 @@
 package journal
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"

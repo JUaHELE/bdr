@@ -289,12 +289,6 @@ func (c *Client) receivePacket(packet *networking.Packet, sendHashReq bool) {
 
 // SendInitPacket sends an initialization packet with device information
 func (c *Client) SendInitPacket(device string) error {
-	// Get sector size of the device
-	sectorSize, err := utils.GetSectorSize(device)
-	if err != nil {
-		return err
-	}
-
 	// Get total size of the device
 	deviceSize, err := utils.GetDeviceSize(device)
 	if err != nil {
@@ -303,8 +297,9 @@ func (c *Client) SendInitPacket(device string) error {
 
 	// Create initialization packet with device information
 	initPacket := networking.InitInfo{
-		SectorSize: sectorSize,
 		DeviceSize: deviceSize,
+		WriteInfoSize: c.TargetInfo.WriteInfoSize,
+		BufferByteSize: c.TargetInfo.BufferByteSize,
 	}
 
 	packet := networking.Packet{
