@@ -509,10 +509,17 @@ func (s *Server) handleCorrectPacket(correctQueue chan *networking.Packet) {
 
 
 func (s *Server) CreateJournal() error {
-	writeCount = s.ClientInfo.BufferByteSize / s.ClientInfo.WriteInfoSize
+	writeCount := s.ClientInfo.BufferByteSize / uint64(s.ClientInfo.WriteInfoSize)
 
-	s.VerbosePrintln("Creating new journal at:", s.Config.JournalPath, "with buffer size in writes", writeCount)
+	s.VerbosePrintln("Creating new journal at:", s.Config.JournalPath, "with buffer size in writes", writeCount, "and correct block size", networking.CorrectBlockByteSize)
 	jrn, err := journal.NewJournal(s.Config.JournalPath, s.ClientInfo.BufferByteSize, uint64(s.ClientInfo.WriteInfoSize), uint64(networking.CorrectBlockByteSize))
+	if err != nil {
+		return err
+	}
+
+	s.VerbosePrintln(jrn.String())
+
+	err = jrn.Init()
 	if err != nil {
 		return err
 	}
@@ -556,6 +563,11 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 
 	// Verify device sizes match
 	if valid := s.CheckValidSizes(); !valid {
+		return
+	}
+
+	if err := s.CreateJournal(); err != nil {
+		s.Println("Error occured while creating journal:", err)
 		return
 	}
 
