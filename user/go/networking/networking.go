@@ -31,6 +31,14 @@ type CorrectBlockInfo struct {
 	Data []byte
 }
 
+func (c *CorrectBlockInfo) IsValid() bool {
+	return c.Size != 0
+}
+
+var (
+	CorrectBlockByteSize = 8 + 4 + HashedSpaceBase
+)
+
 type InitInfo struct {
 	SectorSize uint32
 	DeviceSize uint64
@@ -45,6 +53,11 @@ type WriteInfo struct {
 	Size   uint32
 	Data   []byte
 }
+
+func (w *WriteInfo) IsValid() bool {
+	return w.Size != 0
+}
+
 
 type HashInfo struct {
 	Offset uint64
