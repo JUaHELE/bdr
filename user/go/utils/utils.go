@@ -88,6 +88,21 @@ func GetDeviceSize(device string) (uint64, error) {
 	return size, nil
 }
 
+func GetDeviceSizeForTest(path string) (uint64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return 0, err
+	}
+
+	return uint64(fileInfo.Size()), nil
+}
+
 func HexDump(data []byte) {
 	const bytesPerLine = 16
 	for i := 0; i < len(data); i += bytesPerLine {

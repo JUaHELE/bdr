@@ -39,7 +39,11 @@ type Header struct {
 }
 
 func (j *Journal) String() string {
-	return fmt.Sprintf(`Journal Header:
+	return fmt.Sprintf(`
+Actual offsets:
+  Write offset: %d
+  Correct offset: %d
+Journal Header:
   Magic: 0x%016X
   Buffer Write Section:
     Entry Size: %d bytes
@@ -53,6 +57,8 @@ func (j *Journal) String() string {
     Total Size: %d bytes
   Valid: %v
   Flags: 0x%016X`,
+	j.writeOffset,
+	j.correctOffset,
 	j.header.magic,
 	j.header.bufWriteByteSize,
 	j.header.bufWritesCount,
@@ -132,6 +138,9 @@ type Journal struct {
 	disk     *os.File
 	diskSize uint64
 
+	writeOffset uint64
+	correctOffset uint64
+
 	header *Header
 }
 
@@ -190,14 +199,13 @@ func ReadHeader(disk *os.File) (*Header, error) {
 	return header, nil
 }
 
-func ValidateJournal(diskPath string, journal *Journal) (bool, error) {
+func ValidateJournal(diskPath string, journal *Journal) (bool, *Journal, error) {
 	readJournal, err := OpenJournal(diskPath)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
-	defer readJournal.Close()
 
-	return journal.Equals(readJournal), nil
+	return journal.Equals(readJournal), readJournal, nil
 }
 
 func OpenJournal(diskPath string) (*Journal, error) {
@@ -212,6 +220,11 @@ func OpenJournal(diskPath string) (*Journal, error) {
 		return nil, err
 	}
 
+	if !VerifyMagic(header.magic) {
+		disk.Close()
+		return nil, err
+	}
+
 	// Get disk size
 	diskSize, err := utils.GetDeviceSize(diskPath)
 	if err != nil {
@@ -219,13 +232,26 @@ func OpenJournal(diskPath string) (*Journal, error) {
 		return nil, err
 	}
 
-	journal := &Journal{
+	jrn := &Journal{
 		disk:     disk,
 		diskSize: diskSize,
 		header:   header,
 	}
 
-	return journal, nil
+	firstWrite, err := jrn.FindFirstAvailableBufferWrite()
+	if err != nil {
+		return nil, err
+	}
+
+	firstBuffer, err := jrn.FindFirstAvailableCorrectBlock()
+	if err != nil {
+		return nil, err
+	}
+
+	jrn.writeOffset = firstWrite
+	jrn.correctOffset = firstBuffer
+
+	return jrn, nil
 }
 
 func serializeCorrectBlockInfo(info *networking.CorrectBlockInfo, buffer []byte) {
@@ -330,6 +356,8 @@ func NewJournal(diskPath string, sectionBufWritesSize uint64, bufWriteByteSize u
 	journal := &Journal{
 		disk:     disk,
 		diskSize: diskSize,
+		writeOffset: 0,
+		correctOffset: 0,
 		header:   header,
 	}
 

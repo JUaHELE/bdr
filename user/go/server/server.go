@@ -669,6 +669,9 @@ func (s *Server) HandleConnections(wg *sync.WaitGroup) {
 	}
 }
 
+func (s *Server) CheckJournal() {
+}
+
 // Run starts the server and handles termination signals
 func (s *Server) Run() {
 	s.Println("Starting bdr server listening on", s.Config.IpAddress, "and port", s.Config.Port)
