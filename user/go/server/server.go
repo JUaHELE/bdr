@@ -2,9 +2,9 @@ package main
 
 import (
 	"bdr/benchmark"
+	"bdr/journal"
 	"bdr/networking"
 	"bdr/utils"
-	"bdr/journal"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -54,7 +54,7 @@ type Server struct {
 	TermChan    chan struct{}        // channel for signaling termination
 	Connected   bool                 // flag indicating if a client is connected
 	ConnMutex   sync.Mutex           // mutex for thread-safe connection handling
-	Journal *journal.Journal
+	Journal     *journal.Journal
 	Stats       *benchmark.BenchmarkStats
 }
 
@@ -502,7 +502,6 @@ func (s *Server) handleCorrectPacket(correctQueue chan *networking.Packet) {
 	}
 }
 
-
 func (s *Server) CreateJournal() error {
 	writeCount := s.ClientInfo.BufferByteSize / uint64(s.ClientInfo.WriteInfoSize)
 
@@ -520,7 +519,6 @@ func (s *Server) CreateJournal() error {
 	}
 
 	s.Journal = jrn
-
 
 	s.VerbosePrintln(s.ClientInfo.DeviceSize)
 	cover := jrn.GetJournalCoverPercentage(s.ClientInfo.DeviceSize)

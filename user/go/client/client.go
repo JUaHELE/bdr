@@ -445,7 +445,7 @@ func NewClient(cfg *Config) (*Client, error) {
 		MonitorPauseContr: monitorPauseContr,
 		TermChan:          make(chan struct{}),
 		Stats:             benchmark.NewBenchmarkStats(cfg.Benchmark),
-		state: StateWriting,
+		state:             StateWriting,
 	}, nil
 }
 
@@ -476,7 +476,7 @@ func (c *Client) InitiateCheckedReplication() {
 
 	// Pause the monitor to prevent interference during verification
 	c.MonitorPauseContr.Pause()
-	
+
 	c.SetState(StateHashing)
 	// Request hashes from server to verify consistency
 	packet := networking.Packet{
