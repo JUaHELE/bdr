@@ -116,7 +116,7 @@ func (s *Server) sendPacket(packet *networking.Packet) {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			s.VerbosePrintln("SendPacket failed: ", err)
+			s.DebugPrintln("SendPacket failed: ", err)
 			RetrySleep()
 			continue
 		}
@@ -150,12 +150,7 @@ func (s *Server) CompleteHashing() {
 		Payload:    nil,
 	}
 
-	err := s.Encoder.Encode(packet)
-	if err != nil {
-		s.VerbosePrintln("Error while sending complete hashing info:", err)
-		return
-	}
-
+	s.sendPacket(packet)
 	s.VerbosePrintln("Hashing completed.")
 }
 
@@ -322,7 +317,7 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 
 				// Send hash to client
 				if err := s.Encoder.Encode(&hashPacket); err != nil {
-					s.VerbosePrintln("Error while sending complete hashing info:", err)
+					s.DebugPrintln("Error while sending complete hashing info:", err)
 					errPacket := networking.Packet{
 						PacketType: networking.PacketTypeHashError,
 					}
@@ -596,7 +591,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 				s.Println("Connection closed by the client.")
 				return
 			}
-			s.VerbosePrintln("Failed to decode packet:", err)
+			s.DebugPrintln("Failed to decode packet:", err)
 			continue
 		}
 

@@ -47,8 +47,15 @@ type TargetInfo struct {
 	PageSize       uint64 // Size of a memory page
 	WriteInfoSize  uint32 // Size of a write information structure
 	BufferByteSize uint64 // Total size of the buffer in bytes
-	BitmapByteSize  uint64 // Total size of overflow bitmap in bits
+	BitmapByteSize uint64 // Total size of overflow bitmap in bits
 }
+
+type State int
+
+const (
+	StateHashing State = iota
+	StateWriting
+)
 
 // Client represents a BDR client instance
 type Client struct {
@@ -63,19 +70,46 @@ type Client struct {
 	MonitorPauseContr *pause.PauseController // Used to pause monitor changes function
 	TermChan          chan struct{}          // Termination channel for graceful shutdown
 	Stats             *benchmark.BenchmarkStats
+
+	state      State
+	stateMutex sync.Mutex
+}
+
+func (s State) String() string {
+	return [...]string{
+		"Hashing",
+		"Writing",
+	}[s]
+}
+
+func (c *Client) GetState() State {
+	c.stateMutex.Lock()
+	defer c.stateMutex.Unlock()
+	return c.state
+}
+
+// SetState attempts to transition the client to a new state
+func (c *Client) SetState(newState State) {
+	c.stateMutex.Lock()
+	defer c.stateMutex.Unlock()
+
+	oldState := c.state
+	c.state = newState
+
+	c.VerbosePrintln("Client transitioned from", oldState, "to", newState, "\n")
 }
 
 var (
 	// Buffer state flags
-	BufferOverflownFlag = utils.Bit(0) // Flag indicating buffer overflow has occurred
-	HashQueueSize       = 8
+	BufferOverflownFlag     = utils.Bit(0) // Flag indicating buffer overflow has occurred
+	HashQueueSize           = 8
 	KernelLogicalSectorSize = 512 // Bytes
 )
 
 const (
 	PollInterval  = 100 // Polling interval in milliseconds
 	RetryInterval = 1   // Retry interval in seconds
-	ReadInterval = 5
+	ReadInterval  = 5
 )
 
 // RetrySleep pauses execution for the configured retry interval
@@ -199,7 +233,7 @@ func (c *Client) serveIOCTL(cmd uintptr, arg uintptr) {
 }
 
 // reconnectToServer attempts to reestablish a connection to the server
-func (c *Client) reconnectToServer(sendHashReq bool) {
+func (c *Client) reconnectToServer() {
 	c.VerbosePrintln("Trying to reconnect to the server.")
 	c.Stats.RecordReconnection()
 	// Close existing connection if any
@@ -232,7 +266,8 @@ func (c *Client) reconnectToServer(sendHashReq bool) {
 			}
 
 			// Request hash check if needed
-			if sendHashReq {
+			state := c.GetState()
+			if state == StateHashing {
 				c.InitiateCheckedReplication()
 			}
 
@@ -275,7 +310,7 @@ func (c *Client) receivePacket(packet *networking.Packet, sendHashReq bool) {
 
 			if err == io.EOF {
 				// Connection lost, try to reconnect
-				c.reconnectToServer(sendHashReq)
+				c.reconnectToServer()
 				continue
 			}
 
@@ -297,8 +332,8 @@ func (c *Client) SendInitPacket(device string) error {
 
 	// Create initialization packet with device information
 	initPacket := networking.InitInfo{
-		DeviceSize: deviceSize,
-		WriteInfoSize: c.TargetInfo.WriteInfoSize,
+		DeviceSize:     deviceSize,
+		WriteInfoSize:  c.TargetInfo.WriteInfoSize,
 		BufferByteSize: c.TargetInfo.BufferByteSize,
 	}
 
@@ -410,6 +445,7 @@ func NewClient(cfg *Config) (*Client, error) {
 		MonitorPauseContr: monitorPauseContr,
 		TermChan:          make(chan struct{}),
 		Stats:             benchmark.NewBenchmarkStats(cfg.Benchmark),
+		state: StateWriting,
 	}, nil
 }
 
@@ -440,7 +476,8 @@ func (c *Client) InitiateCheckedReplication() {
 
 	// Pause the monitor to prevent interference during verification
 	c.MonitorPauseContr.Pause()
-
+	
+	c.SetState(StateHashing)
 	// Request hashes from server to verify consistency
 	packet := networking.Packet{
 		PacketType: networking.PacketTypeCmdGetHashes,
@@ -453,6 +490,8 @@ func (c *Client) InitiateCheckedReplication() {
 // ProcessBufferInfo processes write operations stored in the buffer
 func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 	// Process each write operation in the buffer
+	bufferInfo.Print()
+
 	for i := uint64(0); i < bufferInfo.Length; i++ {
 		// Skip if monitor is paused (during hash verification)
 		if c.MonitorPauseContr.IsPaused() {
@@ -470,7 +509,7 @@ func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 			var writeInfoPacket networking.WriteInfo
 			var err error
 
-			var sector uint64
+			var sector uint32
 			// Read sector number
 			if err = binary.Read(reader, binary.LittleEndian, &sector); err != nil {
 				if terminated := c.CheckTermination(); terminated {
@@ -481,7 +520,7 @@ func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 				RetrySleep()
 				continue
 			}
-			writeInfoPacket.Offset = uint64(KernelLogicalSectorSize) * sector;
+			writeInfoPacket.Offset = uint64(KernelLogicalSectorSize) * uint64(sector)
 
 			// Read data size
 			if err = binary.Read(reader, binary.LittleEndian, &writeInfoPacket.Size); err != nil {
@@ -526,8 +565,8 @@ func (c *Client) SpawnRepairWrokers(blockChan chan uint64, wg *sync.WaitGroup) {
 	numWorkers := runtime.NumCPU()
 
 	type sendItem struct {
-		offset   uint64
-		buffer   []byte
+		offset uint64
+		buffer []byte
 	}
 	sendChan := make(chan sendItem)
 
@@ -549,7 +588,7 @@ func (c *Client) SpawnRepairWrokers(blockChan chan uint64, wg *sync.WaitGroup) {
 
 					sendChan <- sendItem{
 						offset: fileOff,
-						buffer:   buf,
+						buffer: buf,
 					}
 				}
 			}()
@@ -648,7 +687,6 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 			continue
 		}
 
-		
 		// Process the write operations in the buffer
 		c.ProcessBufferInfo(&bufferInfo)
 	}
@@ -797,6 +835,7 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 			return
 		case networking.PacketTypeInfoHashingCompleted:
 			c.VerbosePrintln("Hashing completed packet received")
+			c.SetState(StateWriting)
 			return
 		default:
 			c.VerbosePrintln("Unknown packet received while in hashing mode:", packet.PacketType)
