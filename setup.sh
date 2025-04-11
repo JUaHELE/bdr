@@ -6,6 +6,7 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
+
 # Constants
 WRITE_SIZE=4104  # Size of one write in bytes
 
@@ -13,6 +14,10 @@ error_exit() {
     echo "Error: $1" >&2
     exit 1
 }
+
+if ! lsmod | grep "^bdr" > /dev/null ; then
+    error_exit "bdr module is not loaded loaded."
+fi
 
 # Function to convert size to number of writes
 convert_to_writes() {

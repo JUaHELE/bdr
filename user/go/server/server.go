@@ -511,7 +511,7 @@ func (s *Server) handleCorrectPacket(correctQueue chan *networking.Packet) {
 func (s *Server) CreateJournal() error {
 	writeCount := s.ClientInfo.BufferByteSize / uint64(s.ClientInfo.WriteInfoSize)
 
-	s.VerbosePrintln("Creating new journal at:", s.Config.JournalPath, "with buffer size in writes", writeCount, "and correct block size", networking.CorrectBlockByteSize)
+	s.VerbosePrintln("Creating new journal at:", s.Config.JournalPath, "with buffer size in writes", writeCount, "and correct block size", networking.CorrectBlockByteSize, "...")
 	jrn, err := journal.NewJournal(s.Config.JournalPath, s.ClientInfo.BufferByteSize, uint64(s.ClientInfo.WriteInfoSize), uint64(networking.CorrectBlockByteSize))
 	if err != nil {
 		return err
@@ -526,8 +526,10 @@ func (s *Server) CreateJournal() error {
 
 	s.Journal = jrn
 
+
+	s.VerbosePrintln(s.ClientInfo.DeviceSize)
 	cover := jrn.GetJournalCoverPercentage(s.ClientInfo.DeviceSize)
-	s.VerbosePrintln("Journal covers", cover, " percent of the target disk")
+	s.VerbosePrintln("Journal created. Covers", cover, "percent of the target disk.")
 
 	return err
 }

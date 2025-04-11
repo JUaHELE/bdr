@@ -281,10 +281,10 @@ func deserializeWriteInfo(buffer []byte) *networking.WriteInfo {
 	return info
 }
 
-func (j *Journal) GetJournalCoverPercentage(targetDiskSize uint64) uint64 {
-	corrBlockCoverage := j.header.corrBlockByteSize * j.header.corrBlockByteSize
+func (j *Journal) GetJournalCoverPercentage(targetDiskSize uint64) float64 {
+    corrBlockCoverage := j.header.GetCorrBlockSectionByteSize()
 
-	return corrBlockCoverage / targetDiskSize * 100
+    return (float64(corrBlockCoverage) / float64(targetDiskSize)) * 100
 }
 
 func NewJournal(diskPath string, sectionBufWritesSize uint64, bufWriteByteSize uint64, corrBlockByteSize uint64) (*Journal, error) {
