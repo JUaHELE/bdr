@@ -42,6 +42,7 @@ type State int
 const (
 	StateHashing State = iota
 	StateWriting
+	StateWritesToBuffet
 )
 
 // RetrySleep pauses execution for RetryInterval seconds
@@ -370,6 +371,7 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	s.Stats.RecordHashing(elapsed, totalBytesHashed)
 
 	// Notify client that hashing is complete
+	s.SetState(StateWritesToBuffet)
 	s.CompleteHashing()
 }
 
@@ -682,7 +684,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			}
 			RetrySleep()
 			s.WriteJournalToReplica()
-			s.SetState(StateWriting)
+			s.SetState(StateWritesToBuffet)
 		default:
 			s.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}

@@ -677,7 +677,6 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 					ReadSleep()
 					continue
 				}
-
 				break
 			}
 
@@ -794,6 +793,27 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 	c.Stats.RecordHashing(elapsed, totalBytesHashed)
 }
 
+func (c *Client) SendBuffer() bool {
+	var bufferInfo BufferInfo
+	c.serveIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+	// Check if there are new writes to process
+	newWrites := bufferInfo.HasNewWrites()
+	if !newWrites {
+		return true
+	}
+
+	// Check for buffer overflow
+	overflow := bufferInfo.CheckOverflow()
+	if overflow {
+		return false
+	}
+
+	// Process the write operations in the buffer
+	c.ProcessBufferInfo(&bufferInfo)
+
+	return true
+}
+
 func (c *Client) CompleteHashing() {
 	packet := &networking.Packet{
 		PacketType: networking.PacketTypeInfoHashingCompleted,
@@ -843,7 +863,10 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 			close(hashQueue)
 			hashWg.Wait()
 			c.VerbosePrintln("Hashing completed packet received, sending the buffer.")
-			// TODO: before that check buffer overflow send buffer
+			if !c.SendBuffer() {
+				c.InitiateCheckedReplication()
+				continue
+			}
 			c.CompleteHashing()
 			c.SetState(StateWriting)
 			return
