@@ -57,8 +57,8 @@ Journal Header:
     Total Size: %d bytes
   Valid: %v
   Flags: 0x%016X`,
-	j.writeOffset,
-	j.correctOffset,
+	j.WriteOffset,
+	j.CorrectOffset,
 	j.header.magic,
 	j.header.bufWriteByteSize,
 	j.header.bufWritesCount,
@@ -100,6 +100,10 @@ func (j *Journal) Validate() error {
 	return j.WriteHeader()
 }
 
+func (j *Journal) IsValid() bool {
+	return j.header.IsValid()
+}
+
 func (h *Header) IsValid() bool {
 	return (h.flags & JournalValidFlag) != 0
 }
@@ -138,8 +142,8 @@ type Journal struct {
 	disk     *os.File
 	diskSize uint64
 
-	writeOffset uint64
-	correctOffset uint64
+	WriteOffset uint64
+	CorrectOffset uint64
 
 	header *Header
 }
@@ -248,8 +252,8 @@ func OpenJournal(diskPath string) (*Journal, error) {
 		return nil, err
 	}
 
-	jrn.writeOffset = firstWrite
-	jrn.correctOffset = firstBuffer
+	jrn.WriteOffset = firstWrite
+	jrn.CorrectOffset = firstBuffer
 
 	return jrn, nil
 }
@@ -356,8 +360,8 @@ func NewJournal(diskPath string, sectionBufWritesSize uint64, bufWriteByteSize u
 	journal := &Journal{
 		disk:     disk,
 		diskSize: diskSize,
-		writeOffset: 0,
-		correctOffset: 0,
+		WriteOffset: 0,
+		CorrectOffset: 0,
 		header:   header,
 	}
 
@@ -368,6 +372,28 @@ func GetInvalidCorrectBlock() *networking.CorrectBlockInfo {
 	return &networking.CorrectBlockInfo{
 		Size: 0,
 	}
+}
+
+func (j *Journal) Reset() error {
+	err := j.Invalidate()
+	if err != nil {
+		return err
+	}
+
+	err = j.ClearWriteSection()
+	if err != nil {
+		return err
+	}
+
+	err = j.ClearCorrectBlockSection()
+	if err != nil {
+		return err
+	}
+
+	j.WriteOffset = 0
+	j.CorrectOffset = 0
+
+	return nil
 }
 
 func (j *Journal) ClearCorrectBlockSection() error {

@@ -299,7 +299,7 @@ func (c *Client) sendPacket(packet *networking.Packet) {
 }
 
 // receivePacket receives a network packet, reconnecting if necessary
-func (c *Client) receivePacket(packet *networking.Packet, sendHashReq bool) {
+func (c *Client) receivePacket(packet *networking.Packet) {
 	for {
 		err := c.Decoder.Decode(packet)
 		if err != nil {
@@ -794,17 +794,24 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 	c.Stats.RecordHashing(elapsed, totalBytesHashed)
 }
 
+func (c *Client) CompleteHashing() {
+	packet := &networking.Packet{
+		PacketType: networking.PacketTypeInfoHashingCompleted,
+		Payload:    nil,
+	}
+
+	c.sendPacket(packet)
+	c.VerbosePrintln("Hashing completed.")
+}
+
 // handleHashing manages the hash verification process
 func (c *Client) handleHashing(packet *networking.Packet) {
 	c.DebugPrintln("Starting hashing phase...")
 	defer c.MonitorPauseContr.Resume()
 
 	var hashWg sync.WaitGroup
-	defer hashWg.Wait()
 
 	hashQueue := make(chan *networking.Packet, HashQueueSize)
-	defer close(hashQueue)
-
 	hashQueue <- packet
 
 	hashWg.Add(1)
@@ -813,8 +820,7 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 	// Process additional hash packets until complete
 	for {
 		packet := &networking.Packet{}
-		sendHashReq := true
-		c.receivePacket(packet, sendHashReq)
+		c.receivePacket(packet)
 
 		if c.CheckTermination() {
 			c.VerbosePrintln("Terminating hashing handler.")
@@ -834,7 +840,11 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 			c.InitiateCheckedReplication()
 			return
 		case networking.PacketTypeInfoHashingCompleted:
-			c.VerbosePrintln("Hashing completed packet received")
+			close(hashQueue)
+			hashWg.Wait()
+			c.VerbosePrintln("Hashing completed packet received, sending the buffer.")
+			// TODO: before that check buffer overflow send buffer
+			c.CompleteHashing()
 			c.SetState(StateWriting)
 			return
 		default:
@@ -849,8 +859,7 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 
 	for {
 		packet := &networking.Packet{}
-		sendHashReq := false
-		c.receivePacket(packet, sendHashReq)
+		c.receivePacket(packet)
 
 		if c.CheckTermination() {
 			c.VerbosePrintln("Terminating packet listener.")
