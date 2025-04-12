@@ -824,6 +824,16 @@ func (c *Client) CompleteHashing() {
 	c.VerbosePrintln("Hashing completed.")
 }
 
+func (c *Client) CompleteBufferSent() {
+	packet := &networking.Packet{
+		PacketType: networking.PacketTypeBufferSent,
+		Payload:    nil,
+	}
+
+	c.sendPacket(packet)
+	c.VerbosePrintln("Buffer sent.")
+}
+
 // handleHashing manages the hash verification process
 func (c *Client) handleHashing(packet *networking.Packet) {
 	c.DebugPrintln("Starting hashing phase...")
@@ -862,12 +872,13 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 		case networking.PacketTypeInfoHashingCompleted:
 			close(hashQueue)
 			hashWg.Wait()
+			c.CompleteHashing()
 			c.VerbosePrintln("Hashing completed packet received, sending the buffer.")
 			if !c.SendBuffer() {
 				c.InitiateCheckedReplication()
-				continue
+				return
 			}
-			c.CompleteHashing()
+			c.CompleteBufferSent()
 			c.SetState(StateWriting)
 			return
 		default:

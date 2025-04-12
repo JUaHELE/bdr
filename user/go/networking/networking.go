@@ -10,6 +10,7 @@ const (
 	HashedSpaceBase = 1024 * 256 * HashedBlockSize
 	HashSizeSha256 = 32 // size of hash in bytes
 	RepairBlockSize = 1048576 // 1MB
+	WriteInfoSize = 4108
 )
 
 const (
@@ -23,6 +24,7 @@ const (
 	PacketTypeHashError
 	PacketTypeCorrectBlock
 	PacketTypeBitmapBlock
+	PacketTypeBufferSent
 )
 
 type CorrectBlockInfo struct {
