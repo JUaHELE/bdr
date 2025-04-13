@@ -191,6 +191,16 @@ func (s *Server) CompleteHashing() {
 	s.VerbosePrintln("Hashing completed.")
 }
 
+func (s *Server) SendReplicationError() {
+	packet := &networking.Packet{
+		PacketType: networking.PacketTypeReplicationError,
+		Payload:    nil,
+	}
+
+	s.sendPacket(packet)
+	s.VerbosePrintln("Hashing completed.")
+}
+
 // hashDiskAndSend reads the disk in chunks, computes SHA-256 hashes, and sends them to the client
 func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	s.VerbosePrintln("Hashing disk...")
@@ -432,10 +442,14 @@ func (s *Server) handleWriteInfoPacket(writeChan chan *networking.Packet) {
 
 		if state == StateHashing {
 			return
-		} else if s.GetState() == StateWritesToBuffet {
-			if err := s.WriteBufferWriteToJournal(&writeInfo); err != nil {
-				s.VerbosePrintln("Can't copy write into the buffer", err)
-				// TODO: solve this error
+		} else if state == StateWritesToBuffet {
+			for {
+				if err := s.WriteBufferWriteToJournal(&writeInfo); err != nil {
+					s.VerbosePrintln("Can't copy write into the buffer", err)
+					continue
+				}
+
+				break
 			}
 		} else {
 			// Calculate disk offset based on sector number and size
@@ -444,10 +458,14 @@ func (s *Server) handleWriteInfoPacket(writeChan chan *networking.Packet) {
 			s.Stats.RecordWrite(uint64(writeInfo.Size))
 
 			// Write data to the target device
-			if _, err := s.TargetDevFd.WriteAt(dataToWrite, int64(writeInfo.Offset)); err != nil {
-				s.VerbosePrintln("Failed to write data to device:", err)
+			for {
+				if _, err := s.TargetDevFd.WriteAt(dataToWrite, int64(writeInfo.Offset)); err != nil {
+					s.VerbosePrintln("Failed to write data to device:", err)
+					continue
+				}
+				break
 			}
-
+			
 			s.TargetDevFd.Sync()
 		}
 	}
@@ -544,7 +562,8 @@ func (s *Server) handleCorrectPacket(correctQueue chan *networking.Packet) {
 }
 
 func (s *Server) WriteJournalToReplica() {
-	// TODO: set valid on journal
+	s.Journal.Validate()
+
 	s.VerbosePrintln("Writing journal to replica...")
 	for i := uint64(0); i < s.Journal.CorrectOffset; {
 		correctBlock, err := s.Journal.ReadCorrectBlock(i)
@@ -578,12 +597,15 @@ func (s *Server) WriteJournalToReplica() {
 		// Write data to the target device
 		if _, err := s.TargetDevFd.WriteAt(dataToWrite, int64(bufferWrite.Offset)); err != nil {
 			s.VerbosePrintln("Failed to write data to device:", err)
+			continue
 		}
 
 		s.TargetDevFd.Sync()
 
 		i++
 	}
+
+	s.Journal.Invalidate()
 
 	s.VerbosePrintln("Journal sucessfully written to replica.")
 }
@@ -617,6 +639,7 @@ func (s *Server) CreateJournal() error {
 func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	defer s.CloseClientConn()
 	defer wg.Done()
+	defer s.SetState(StateWriting)
 
 	s.Println("Accepted connection from", s.Conn.RemoteAddr())
 
@@ -687,12 +710,12 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			for len(hashingTermChan) > 0 {
 				time.Sleep(time.Millisecond * 10)
 			}
+			s.SetState(StateHashing)
 			s.Journal.Reset()
 			hashingTermChan = make(chan struct{})
 			childWg.Add(1)
 			go func() {
 				defer childWg.Done()
-				s.SetState(StateHashing)
 				s.hashDiskAndSend(hashingTermChan, networking.HashedSpaceBase)
 			}()
 		case networking.PacketTypeWriteInfo:

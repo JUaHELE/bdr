@@ -25,6 +25,7 @@ const (
 	PacketTypeCorrectBlock
 	PacketTypeBitmapBlock
 	PacketTypeBufferSent
+	PacketTypeReplicationError
 )
 
 type CorrectBlockInfo struct {

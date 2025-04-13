@@ -867,16 +867,26 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 			hashQueue <- packet
 		case networking.PacketTypeHashError:
 			c.VerbosePrintln("ERROR: error occured on the remote side while hashing, retrying...")
+			close(hashQueue)
+			hashWg.Wait()
+			RetrySleep()
+			hashQueue = make(chan *networking.Packet, HashQueueSize)
+			hashWg.Add(1)
+			go c.initHashing(hashQueue, &hashWg)
 			c.InitiateCheckedReplication()
-			return
+			continue
 		case networking.PacketTypeInfoHashingCompleted:
 			close(hashQueue)
 			hashWg.Wait()
+			RetrySleep()
 			c.CompleteHashing()
 			c.VerbosePrintln("Hashing completed packet received, sending the buffer.")
 			if !c.SendBuffer() {
 				c.InitiateCheckedReplication()
-				return
+				hashQueue = make(chan *networking.Packet, HashQueueSize)
+				hashWg.Add(1)
+				go c.initHashing(hashQueue, &hashWg)
+				continue
 			}
 			c.CompleteBufferSent()
 			c.SetState(StateWriting)
