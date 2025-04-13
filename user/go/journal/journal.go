@@ -226,7 +226,7 @@ func OpenJournal(diskPath string) (*Journal, error) {
 
 	if !VerifyMagic(header.magic) {
 		disk.Close()
-		return nil, err
+		return nil, ErrInvalidMagic
 	}
 
 	// Get disk size
@@ -244,11 +244,13 @@ func OpenJournal(diskPath string) (*Journal, error) {
 
 	firstWrite, err := jrn.FindFirstAvailableBufferWrite()
 	if err != nil {
+		disk.Close()
 		return nil, err
 	}
 
 	firstBuffer, err := jrn.FindFirstAvailableCorrectBlock()
 	if err != nil {
+		disk.Close()
 		return nil, err
 	}
 
