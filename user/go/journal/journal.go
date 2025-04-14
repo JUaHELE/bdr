@@ -343,7 +343,6 @@ func NewJournal(diskPath string, sectionBufWritesSize uint64, bufWriteByteSize u
 	}
 
 	sectionCorBlocksSize := diskSize - headerSize - sectionBufWritesSize
-	fmt.Println(diskSize, headerSize, sectionBufWritesSize)
 
 	header := &Header{
 		magic: BdrMagic,
@@ -438,6 +437,10 @@ func (j *Journal) ClearWriteSection() error {
 	}
 
 	return nil
+}
+
+func (j *Journal) InitWithoutClearing() error {
+	return j.Invalidate()
 }
 
 func (j *Journal) Init() error {

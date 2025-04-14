@@ -471,6 +471,7 @@ func (c *Client) CloseResources() {
 
 // InitiateCheckedReplication starts a full device verification
 func (c *Client) InitiateCheckedReplication() {
+	c.VerbosePrintln("Initiating full replication.")
 	// Reset buffer since we'll perform full verification
 	c.ResetBufferIOCTL()
 
@@ -659,26 +660,6 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 		overflow := bufferInfo.CheckOverflow()
 		if overflow {
 			c.VerbosePrintln("Buffer overflown...")
-
-			c.ResetBufferIOCTL()
-			ReadSleep()
-			// Wait until no new writes are occurring before starting verification
-			for {
-				if terminated := c.MonitorPauseContr.WaitIfPaused(c.TermChan); terminated {
-					c.VerbosePrintln("Stopping change monitoring due to shutdown.")
-					return
-				}
-
-				c.serveIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
-				newWrites = bufferInfo.HasNewWrites()
-				if newWrites {
-					// If new writes are occurring, wait before trying to verify
-					c.ResetBufferIOCTL()
-					ReadSleep()
-					continue
-				}
-				break
-			}
 
 			c.Stats.RecordBufferOverflow()
 			// Initiate full device verification

@@ -91,7 +91,7 @@ func (s *Server) SetState(newState State) {
 	oldState := s.state
 	s.state = newState
 
-	s.VerbosePrintln("Client transitioned from", oldState, "to", newState, "\n")
+	s.VerbosePrintln("Server transitioned from", oldState, "to", newState, "\n")
 }
 
 // Println logs a message with standard priority
@@ -441,7 +441,7 @@ func (s *Server) handleWriteInfoPacket(writeChan chan *networking.Packet) {
 		state := s.GetState()
 
 		if state == StateHashing {
-			return
+			continue
 		} else if state == StateWritesToBuffet {
 			for {
 				if err := s.WriteBufferWriteToJournal(&writeInfo); err != nil {
@@ -552,6 +552,7 @@ func (s *Server) handleCorrectPacket(correctQueue chan *networking.Packet) {
 		for {
 			// Write the correct data to disk
 			if err := s.WriteCorrectBlockToJournal(&correctInfo); err != nil {
+				// TODO: is full, initiate full replication
 				s.VerbosePrintln("Can't write correct block:", err)
 				RetrySleep()
 				continue
@@ -621,7 +622,7 @@ func (s *Server) CreateJournal() error {
 
 	s.VerbosePrintln(jrn.String())
 
-	err = jrn.Init()
+	err = jrn.InitWithoutClearing()
 	if err != nil {
 		return err
 	}
@@ -711,6 +712,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 				time.Sleep(time.Millisecond * 10)
 			}
 			s.SetState(StateHashing)
+			s.VerbosePrintln("Reseting journal...")
 			s.Journal.Reset()
 			hashingTermChan = make(chan struct{})
 			childWg.Add(1)
@@ -869,6 +871,8 @@ func (s *Server) CopyJournalToReplica(jrn *journal.Journal) {
 		s.WriteBufferWriteToReplica(correctBlock)
 		i++
 	}
+
+	s.VerbosePrintln("Journal copyied into replica.")
 }
 
 func (s *Server) CheckJournal() {
@@ -888,6 +892,8 @@ func (s *Server) CheckJournal() {
 	s.VerbosePrintln(jrn.String())
 
 	s.CopyJournalToReplica(jrn)
+
+	jrn.Invalidate()
 }
 
 // Run starts the server and handles termination signals
