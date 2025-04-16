@@ -15,9 +15,11 @@ const (
 
 const (
 	PacketTypeCmdGetHashes = iota
+	PacketTypeCmdGetHashesWithoutJournal
 	PacketTypeWriteInfo
 	PacketTypeInit
 	PacketTypeErrInit
+	PacketTypeErrorJournalFull
 	PacketTypeSha256
 	PacketTypeInfoHashingCompleted
 	PacketTypeHash
@@ -26,6 +28,7 @@ const (
 	PacketTypeBitmapBlock
 	PacketTypeBufferSent
 	PacketTypeReplicationError
+	PacketTypeErrJournalCreation
 )
 
 type CorrectBlockInfo struct {

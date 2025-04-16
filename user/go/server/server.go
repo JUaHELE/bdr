@@ -43,6 +43,7 @@ const (
 	StateHashing State = iota
 	StateWriting
 	StateWritesToBuffet
+	StateJournalOverflown
 )
 
 // RetrySleep pauses execution for RetryInterval seconds
@@ -74,6 +75,7 @@ func (s State) String() string {
 		"Hashing",
 		"Writing",
 		"WritesToBuffer",
+		"JournalOverflown",
 	}[s]
 }
 
@@ -141,23 +143,10 @@ func NewServer(cfg *Config) (*Server, error) {
 
 // sendPacket sends a network packet, retrying until successful or terminated
 func (s *Server) sendPacket(packet *networking.Packet) {
-	for {
-		err := s.Encoder.Encode(packet)
-		if err != nil {
-			// Check if we should stop trying due to termination signal
-			if terminated := s.CheckTermination(); terminated {
-				s.VerbosePrintln("Terminating attempt for successful packet send...")
-				return
-			}
-
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			s.DebugPrintln("SendPacket failed: ", err)
-			RetrySleep()
-			continue
-		}
-		break
+	err := s.Encoder.Encode(packet)
+	if err != nil {
+		// Check if we should stop trying due to termination signal
+		s.DebugPrintln("SendPacket failed: ", err)
 	}
 }
 
@@ -201,7 +190,7 @@ func (s *Server) SendReplicationError() {
 	s.VerbosePrintln("Hashing completed.")
 }
 
-// hashDiskAndSend reads the disk in chunks, computes SHA-256 hashes, and sends them to the client
+// hashDiskAndSend reads the disk in chunks, computes hashes, and sends them to the client
 func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	s.VerbosePrintln("Hashing disk...")
 
@@ -539,25 +528,43 @@ func (s *Server) CheckValidSizes() bool {
 	return true
 }
 
+func (s *Server) SendJournalOverflow() {
+	packet := &networking.Packet{
+		PacketType: networking.PacketTypeErrorJournalFull,
+		Payload:    nil,
+	}
+
+	s.sendPacket(packet)
+	s.VerbosePrintln("Journal overflown.")
+}
+
+func (s *Server) SendErrorWhileJournalCreation() {
+	packet := &networking.Packet{
+		PacketType: networking.PacketTypeErrJournalCreation,
+		Payload:    nil,
+	}
+
+	s.sendPacket(packet)
+}
+
 // handleCorrectPacket writes a correct block to the target device based on client information
 func (s *Server) handleCorrectPacket(correctQueue chan *networking.Packet) {
 	for packet := range correctQueue {
-
 		// Extract correct block information
 		correctInfo, ok := packet.Payload.(networking.CorrectBlockInfo)
 		if !ok {
 			s.VerbosePrintln("invalid packet type for correctblock")
 		}
-
-		for {
-			// Write the correct data to disk
+		
+		state := s.GetState()
+		// Write the correct data to disk
+		if state == StateJournalOverflown {
+			s.WriteCorrectBlockToReplica(&correctInfo)
+		} else {
 			if err := s.WriteCorrectBlockToJournal(&correctInfo); err != nil {
-				// TODO: is full, initiate full replication
-				s.VerbosePrintln("Can't write correct block:", err)
-				RetrySleep()
-				continue
+				s.SetState(StateJournalOverflown)
+				s.SendJournalOverflow()
 			}
-			break
 		}
 	}
 }
@@ -673,6 +680,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 
 	if err := s.CreateJournal(); err != nil {
 		s.Println("Error occured while creating journal:", err)
+		s.SendErrorWhileJournalCreation()
 		return
 	}
 
@@ -714,6 +722,19 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			s.SetState(StateHashing)
 			s.VerbosePrintln("Reseting journal...")
 			s.Journal.Reset()
+			s.VerbosePrintln("Journal reset...")
+			hashingTermChan = make(chan struct{})
+			childWg.Add(1)
+			go func() {
+				defer childWg.Done()
+				s.hashDiskAndSend(hashingTermChan, networking.HashedSpaceBase)
+			}()
+		case networking.PacketTypeCmdGetHashesWithoutJournal:
+			s.VerbosePrintln("Hashing without journal. Blocks are written directly to replica.")
+			close(hashingTermChan)
+			for len(hashingTermChan) > 0 {
+				time.Sleep(time.Millisecond * 10)
+			}
 			hashingTermChan = make(chan struct{})
 			childWg.Add(1)
 			go func() {
@@ -727,7 +748,11 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			// Process correct block
 			correctQueue <- packet
 		case networking.PacketTypeInfoHashingCompleted:
-			s.SetState(StateWritesToBuffet)
+			if s.GetState() == StateJournalOverflown {
+				s.SetState(StateWriting)
+			} else {
+				s.SetState(StateWritesToBuffet)
+			}
 		case networking.PacketTypeBufferSent:
 			for len(correctQueue) > 0 || len(writeQueue) > 0 {
 				time.Sleep(time.Millisecond * 10)
@@ -875,17 +900,17 @@ func (s *Server) CopyJournalToReplica(jrn *journal.Journal) {
 	s.VerbosePrintln("Journal copyied into replica.")
 }
 
-func (s *Server) CheckJournal() {
+func (s *Server) CheckJournal() error {
 	jrn, err := journal.OpenJournal(s.Config.JournalPath)
 	if err != nil {
 		s.DebugPrintln("There is corrupted journal on specified path, continuing...")
-		return
+		return nil
 	}
 
 	if !jrn.IsValid() {
 		s.DebugPrintln("Journal on specified path is invalid, continuing...")
 		s.DebugPrintln(jrn.String())
-		return
+		return nil
 	}
 
 	s.Println("Journal on specified path is valid, copying the journal to replica...")
@@ -894,6 +919,8 @@ func (s *Server) CheckJournal() {
 	s.CopyJournalToReplica(jrn)
 
 	jrn.Invalidate()
+
+	return nil
 }
 
 // Run starts the server and handles termination signals
@@ -901,7 +928,11 @@ func (s *Server) Run() {
 	s.Println("Starting bdr server listening on", s.Config.IpAddress, "and port", s.Config.Port)
 	s.VerbosePrintln("Target device:", s.Config.TargetDevPath)
 
-	s.CheckJournal()
+	err := s.CheckJournal()
+	if err != nil {
+		s.Println("Can't create journal:", err)
+		return
+	}
 
 	var termWg sync.WaitGroup
 	termWg.Add(1)

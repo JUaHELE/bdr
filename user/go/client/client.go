@@ -469,6 +469,25 @@ func (c *Client) CloseResources() {
 	}
 }
 
+
+func (c *Client) InitiateCheckedReplicationWithoutJournal() {
+	c.VerbosePrintln("Initiating full replication.")
+	// Reset buffer since we'll perform full verification
+	c.ResetBufferIOCTL()
+
+	// Pause the monitor to prevent interference during verification
+	c.MonitorPauseContr.Pause()
+
+	c.SetState(StateHashing)
+	// Request hashes from server to verify consistency
+	packet := networking.Packet{
+		PacketType: networking.PacketTypeCmdGetHashesWithoutJournal,
+		Payload:    nil,
+	}
+
+	c.sendPacket(&packet)
+}
+
 // InitiateCheckedReplication starts a full device verification
 func (c *Client) InitiateCheckedReplication() {
 	c.VerbosePrintln("Initiating full replication.")
@@ -843,6 +862,9 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 		case networking.PacketTypeErrInit:
 			c.Println("ERROR: Remote and local devices do not have the same size.")
 			close(c.TermChan)
+		case networking.PacketTypeErrJournalCreation:
+			c.Println("ERROR: Can't create journal: Small backup disk.")
+			close(c.TermChan)
 		case networking.PacketTypeHash:
 			// Process each hash packet in parallel
 			hashQueue <- packet
@@ -872,6 +894,16 @@ func (c *Client) handleHashing(packet *networking.Packet) {
 			c.CompleteBufferSent()
 			c.SetState(StateWriting)
 			return
+		case networking.PacketTypeErrorJournalFull:
+			c.VerbosePrintln("WARNING: Journal overflown.")
+			close(hashQueue)
+			hashWg.Wait()
+			RetrySleep()
+			hashQueue = make(chan *networking.Packet, HashQueueSize)
+			hashWg.Add(1)
+			go c.initHashing(hashQueue, &hashWg)
+			c.InitiateCheckedReplicationWithoutJournal()
+			continue
 		default:
 			c.VerbosePrintln("Unknown packet received while in hashing mode:", packet.PacketType)
 		}
@@ -903,6 +935,9 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 			c.Println("ERROR: hash error accepted while not in hash mode")
 		case networking.PacketTypeInfoHashingCompleted:
 			c.DebugPrintln("ERROR: hashing completed packet accepted while not in hash mode")
+		case networking.PacketTypeErrJournalCreation:
+			c.Println("ERROR: Can't create journal: Small backup disk.")
+			close(c.TermChan)
 		default:
 			c.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}
