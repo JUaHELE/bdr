@@ -22,6 +22,7 @@ const (
 	PacketTypeErrInvalidSizes
 	PacketTypeErrHash
 	PacketTypeErrJournalCreate
+	PacketTypeErrJournalOverflow
 	PacketTypePayloadBufferWrite
 	PacketTypePayloadHash
 	PacketTypePayloadCorrectBlock

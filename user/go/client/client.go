@@ -830,7 +830,16 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 			c.ProcessBuffer()
 
 			hashQueue = make(chan *networking.Packet, HashPacketQueueSize)
+		case networking.PacketTypeErrJournalOverflow:
+			close(hashQueue)
+			hashWg.Wait()
 
+			c.Println("Journal has overflown, stopping BDR deamon.")
+			c.Println("If you wish to start BDR daemon with direct full scan, start it with -fullscan.")
+			c.Println("Use with cautious, because the replica will be corrupted while scanning.")
+			c.Println("It is advised to resize the journal or backup the replica.")
+
+			return
 		}
 	}
 }

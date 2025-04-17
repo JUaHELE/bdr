@@ -46,6 +46,7 @@ const (
 	StateWriting
 	StateDisconnected
 	StateDestroyingReplica
+	StateJournalOverflow
 )
 
 // RetrySleep pauses execution for RetryInterval seconds
@@ -78,6 +79,7 @@ func (s State) String() string {
 		"Writing",
 		"Disconnected",
 		"DestroyingReplica",
+		"JournalOverflow",
 	}[s]
 }
 
@@ -518,12 +520,12 @@ func (s *Server) HandleWritePackets(writeQueue chan *networking.Packet, wg *sync
 func (s *Server) HandleJournalBufferWrite(packet *networking.Packet) error {
 	writeInfo, ok := packet.Payload.(networking.WriteInfo)
 	if !ok {
-		fmt.Errorf("Invalid payload type for WriteInfo")
+		return fmt.Errorf("Invalid payload type for WriteInfo")
 	}
  
 	err := s.WriteBufferWriteToJournal(&writeInfo)
 	if err != nil {
-		fmt.Errorf("Can't write buffer write to replica: %v", err)
+		return fmt.Errorf("Can't write buffer write to replica: %v", err)
 	}
 
 	return nil
@@ -547,16 +549,35 @@ func (s *Server) HandleJournalPackets(journalQueue chan *networking.Packet, wg *
 	wg.Done()
 
 	for packet := range journalQueue {
+		state := s.GetState()
+		if state == StateJournalOverflow {
+			continue
+		}
+
 		switch packet.PacketType {
 		case networking.PacketTypePayloadBufferWrite:
 			err := s.HandleJournalBufferWrite(packet)
 			if err != nil {
+				errPacket := CreateInfoPacket(networking.PacketTypeErrJournalOverflow)
+				errSend := s.SendPacket(errPacket)
+				if errSend != nil {
+					s.VerbosePrintln("Can't send journal overflow packet", errSend)
+				}
+
 				s.VerbosePrintln("Journal packet handle failed:", err)
+				s.SetState(StateJournalOverflow)
 			}
 		case networking.PacketTypePayloadCorrectBlock:
 			err := s.HandleJournalCorrectBlock(packet)
 			if err != nil {
+				errPacket := CreateInfoPacket(networking.PacketTypeErrJournalOverflow)
+				errSend := s.SendPacket(errPacket)
+				if errSend != nil {
+					s.VerbosePrintln("Can't send journal overflow packet", errSend)
+				}
+
 				s.VerbosePrintln("Journal packet handle failed:", err)
+				s.SetState(StateJournalOverflow)
 			}
 		}
 	}
@@ -566,7 +587,12 @@ func (s *Server) HandleJournalWriting() {
 	err := s.WriteJournalToReplica()
 	if err != nil {
 		s.VerbosePrintln("Can't write journal to replica:", err)
-		// TODO: send journal overflown
+
+		errPacket := CreateInfoPacket(networking.PacketTypeErrJournalOverflow)
+		errSend := s.SendPacket(errPacket)
+		if err != nil {
+			s.VerbosePrintln("Can't send journal overflow packet:", errSend)
+		}
 	}
 }
 
@@ -680,7 +706,10 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	if err := s.CreateJournal(); err != nil {
 		s.Println("Can't create journal:", err)
 		errPacket := CreateInfoPacket(networking.PacketTypeErrJournalCreate)
-		s.SendPacket(errPacket)
+		err := s.SendPacket(errPacket)
+		if err != nil {
+			s.VerbosePrintln("Can't send create journal packet:", err)
+		}
 		return
 	}
 
