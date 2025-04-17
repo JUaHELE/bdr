@@ -47,6 +47,23 @@ func ChanHasTerminated(termChan chan struct{}) bool {
 	}
 }
 
+func DrainChannel[T any](ch <-chan T) int {
+	count := 0
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				// Channel is closed
+				return count
+			}
+			count++
+		default:
+			// Channel is empty but not closed
+			return count
+		}
+	}
+}
+
 const BLKSSZGET = 0x1268
 
 func GetSectorSize(device string) (uint32, error) {

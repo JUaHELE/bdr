@@ -106,10 +106,15 @@ var (
 	KernelLogicalSectorSize = 512 // Bytes
 )
 
+var (
+	HashPacketQueueSize = 8
+)
+
 const (
 	PollInterval  = 100 // Polling interval in milliseconds
 	RetryInterval = 1   // Retry interval in seconds
 	ReadInterval  = 5
+	BenchmarkPrintInterval = 10 // seconds
 )
 
 // RetrySleep pauses execution for the configured retry interval
@@ -173,29 +178,36 @@ func (c *Client) CheckTermination() bool {
 	}
 }
 
-// reads bitmap from kernel that represents modified blocks
-func (c *Client) ReadOverflowBitmap(bufferInfo *BufferInfo) ([]byte, error) {
-	c.ProcessBufferInfo(bufferInfo)
-	c.ResetBufferIOCTL()
+func (c *Client) SendPacket(packet *networking.Packet) {
+	for {
+		err := c.Encoder.Encode(packet)
+		if err != nil {
+			if terminated := c.CheckTermination(); terminated {
+				c.VerbosePrintln("Terminating attepmt for successfull packet send...")
+				return
+			}
 
-	bitmap := make([]byte, c.TargetInfo.BitmapByteSize)
+			c.VerbosePrintln("SendPacket failed: ", err)
+			RetrySleep()
+			continue
+		}
+		break
+	}
+}
 
-	n, err := c.CharDevFile.Read(bitmap)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to read bitmap: %v", err)
+func CreateInfoPacket(packetType uint32) *networking.Packet {
+	packet := &networking.Packet{
+		PacketType: packetType,
+		Payload:    nil,
 	}
 
-	if uint64(n) != c.TargetInfo.BitmapByteSize {
-		return nil, fmt.Errorf("Partial read: %d of %d bytes", n, c.TargetInfo.BitmapByteSize)
-	}
-
-	return bitmap, nil
+	return packet
 }
 
 // ResetBufferIOCTL resets the buffer using an IOCTL command
 func (c *Client) ResetBufferIOCTL() {
 	c.VerbosePrintln("Reseting buffer...")
-	c.serveIOCTL(BDR_CMD_RESET_BUFFER, 0)
+	c.ServeIOCTL(BDR_CMD_RESET_BUFFER, 0)
 }
 
 // GetBufferInfoByteOffset calculates the byte offset in the buffer for a given logical offset
@@ -215,7 +227,7 @@ func (c *Client) executeIOCTL(cmd uintptr, arg uintptr) error {
 }
 
 // serveIOCTL is a wrapper around ioctl calls that retries until successful or termination
-func (c *Client) serveIOCTL(cmd uintptr, arg uintptr) {
+func (c *Client) ServeIOCTL(cmd uintptr, arg uintptr) {
 	for {
 		err := c.executeIOCTL(cmd, arg)
 		if err != nil {
@@ -268,38 +280,19 @@ func (c *Client) reconnectToServer() {
 			// Request hash check if needed
 			state := c.GetState()
 			if state == StateHashing {
-				c.InitiateCheckedReplication()
+				c.StartHashing()
 			}
 
 			c.Println("Successfully reconnected to server")
 			return
 		}
 
-		RetrySleep()
 		c.VerbosePrintln("Attempt for reconnection failed. Trying again...")
 	}
 }
 
-// sendPacket sends a network packet, retrying if necessary
-func (c *Client) sendPacket(packet *networking.Packet) {
-	for {
-		err := c.Encoder.Encode(packet)
-		if err != nil {
-			if terminated := c.CheckTermination(); terminated {
-				c.VerbosePrintln("Terminating attepmt for successfull packet send...")
-				return
-			}
-
-			c.VerbosePrintln("SendPacket failed: ", err)
-			RetrySleep()
-			continue
-		}
-		break
-	}
-}
-
 // receivePacket receives a network packet, reconnecting if necessary
-func (c *Client) receivePacket(packet *networking.Packet) {
+func (c *Client) ReceivePacket(packet *networking.Packet) {
 	for {
 		err := c.Decoder.Decode(packet)
 		if err != nil {
@@ -338,18 +331,18 @@ func (c *Client) SendInitPacket(device string) error {
 	}
 
 	packet := networking.Packet{
-		PacketType: networking.PacketTypeInit,
+		PacketType: networking.PacketTypeInfoInit,
 		Payload:    initPacket,
 	}
 
 	// Send the initialization packet
-	c.sendPacket(&packet)
+	c.SendPacket(&packet)
 
 	return nil
 }
 
 // sendCorrectBlock sends the correct data for a block that failed hash verification
-func (c *Client) sendCorrectBlock(buf []byte, offset uint64, size uint32) {
+func (c *Client) SendCorrectBlock(buf []byte, offset uint64, size uint32) {
 	// Create a correct block info packet
 	correctBlockInfo := &networking.CorrectBlockInfo{
 		Offset: offset,
@@ -359,12 +352,12 @@ func (c *Client) sendCorrectBlock(buf []byte, offset uint64, size uint32) {
 
 	// Wrap in a network packet
 	correctBlockPacket := &networking.Packet{
-		PacketType: networking.PacketTypeCorrectBlock,
+		PacketType: networking.PacketTypePayloadCorrectBlock,
 		Payload:    correctBlockInfo,
 	}
 
 	// Send the packet
-	c.sendPacket(correctBlockPacket)
+	c.SendPacket(correctBlockPacket)
 }
 
 func (c *Client) StartStatsPrinting(interval time.Duration) {
@@ -469,27 +462,8 @@ func (c *Client) CloseResources() {
 	}
 }
 
-
-func (c *Client) InitiateCheckedReplicationWithoutJournal() {
-	c.VerbosePrintln("Initiating full replication.")
-	// Reset buffer since we'll perform full verification
-	c.ResetBufferIOCTL()
-
-	// Pause the monitor to prevent interference during verification
-	c.MonitorPauseContr.Pause()
-
-	c.SetState(StateHashing)
-	// Request hashes from server to verify consistency
-	packet := networking.Packet{
-		PacketType: networking.PacketTypeCmdGetHashesWithoutJournal,
-		Payload:    nil,
-	}
-
-	c.sendPacket(&packet)
-}
-
 // InitiateCheckedReplication starts a full device verification
-func (c *Client) InitiateCheckedReplication() {
+func (c *Client) StartHashing() {
 	c.VerbosePrintln("Initiating full replication.")
 	// Reset buffer since we'll perform full verification
 	c.ResetBufferIOCTL()
@@ -500,11 +474,11 @@ func (c *Client) InitiateCheckedReplication() {
 	c.SetState(StateHashing)
 	// Request hashes from server to verify consistency
 	packet := networking.Packet{
-		PacketType: networking.PacketTypeCmdGetHashes,
+		PacketType: networking.PacketTypeCmdStartHashing,
 		Payload:    nil,
 	}
 
-	c.sendPacket(&packet)
+	c.SendPacket(&packet)
 }
 
 // ProcessBufferInfo processes write operations stored in the buffer
@@ -567,11 +541,11 @@ func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 
 			// Send the write operation to the server for replication
 			packet := networking.Packet{
-				PacketType: networking.PacketTypeWriteInfo,
+				PacketType: networking.PacketTypePayloadBufferWrite,
 				Payload:    writeInfoPacket,
 			}
 
-			c.sendPacket(&packet)
+			c.SendPacket(&packet)
 
 			// Successfully processed this write info, continue to next
 			break
@@ -623,35 +597,11 @@ func (c *Client) SpawnRepairWrokers(blockChan chan uint64, wg *sync.WaitGroup) {
 			defer sendWg.Done()
 
 			for send := range sendChan {
-				c.sendCorrectBlock(send.buffer, send.offset, networking.RepairBlockSize)
+				c.SendCorrectBlock(send.buffer, send.offset, networking.RepairBlockSize)
 			}
 		}()
 	}
 	sendWg.Wait()
-}
-
-func (c *Client) StartRepair(bufferInfo *BufferInfo, bitmap []byte) {
-	c.VerbosePrintln("Repairing the disk...")
-
-	blockChan := make(chan uint64, 16)
-
-	var sendWg sync.WaitGroup
-	sendWg.Add(1)
-	go c.SpawnRepairWrokers(blockChan, &sendWg)
-
-	for i := uint64(0); i < c.TargetInfo.BitmapByteSize; i++ {
-		for j := 0; j < 8; j++ {
-			if (bitmap[i] & (1 << (7 - uint(j)))) != 0 {
-				c.DebugPrintln("Found changed block")
-				deviceOffMb := (i * 8) + uint64(j)
-				blockChan <- deviceOffMb
-			}
-		}
-	}
-	close(blockChan)
-
-	sendWg.Wait()
-	c.VerbosePrintln("Disk repaired.")
 }
 
 // MonitorChanges continuously monitors for changes to replicate
@@ -667,7 +617,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 
 		// Get buffer information via IOCTL
 		var bufferInfo BufferInfo
-		c.serveIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+		c.ServeIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 		// Check if there are new writes to process
 		newWrites := bufferInfo.HasNewWrites()
 		if !newWrites {
@@ -682,7 +632,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 
 			c.Stats.RecordBufferOverflow()
 			// Initiate full device verification
-			c.InitiateCheckedReplication()
+			c.StartHashing()
 			continue
 		}
 
@@ -691,7 +641,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 	}
 }
 
-func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.WaitGroup) {
+func (c *Client) InitHashing(hashChan chan *networking.Packet, hashWg *sync.WaitGroup) {
 	defer hashWg.Done()
 
 	numWorkers := runtime.NumCPU()
@@ -726,13 +676,13 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 					hashInfo, ok := packet.Payload.(networking.HashInfo)
 					if !ok {
 						c.VerbosePrintln("invalid payload for type for HashInfo")
-						c.InitiateCheckedReplication()
+						c.StartHashing()
 					}
 
 					buf := make([]byte, hashInfo.Size)
 					if _, err := c.UnderDevFile.ReadAt(buf, int64(hashInfo.Offset)); err != nil && err != io.EOF {
 						c.VerbosePrintln("Error while reading the disk...")
-						c.InitiateCheckedReplication()
+						c.StartHashing()
 					}
 
 					workChan <- workItem{
@@ -780,7 +730,7 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 				if comp.hash != comp.hashInfo.Hash {
 					c.DebugPrintln("Blocks are not equal")
 					// Send the correct block data if hashes don't match
-					c.sendCorrectBlock(comp.buffer, comp.hashInfo.Offset, comp.hashInfo.Size)
+					c.SendCorrectBlock(comp.buffer, comp.hashInfo.Offset, comp.hashInfo.Size)
 				} else {
 					c.DebugPrintln("Blocks are equal...")
 				}
@@ -793,9 +743,22 @@ func (c *Client) initHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 	c.Stats.RecordHashing(elapsed, totalBytesHashed)
 }
 
+func (c *Client) ProcessBuffer() {
+	sent := c.SendBuffer()
+	if !sent {
+		c.StartHashing()
+	} else {
+		c.SetState(StateWriting)
+		c.MonitorPauseContr.Resume()
+
+		packet := CreateInfoPacket(networking.PacketTypeInfoHashingCompleted)
+		c.SendPacket(packet)
+	}
+}
+
 func (c *Client) SendBuffer() bool {
 	var bufferInfo BufferInfo
-	c.serveIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
+	c.ServeIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 	// Check if there are new writes to process
 	newWrites := bufferInfo.HasNewWrites()
 	if !newWrites {
@@ -814,132 +777,45 @@ func (c *Client) SendBuffer() bool {
 	return true
 }
 
-func (c *Client) CompleteHashing() {
-	packet := &networking.Packet{
-		PacketType: networking.PacketTypeInfoHashingCompleted,
-		Payload:    nil,
-	}
-
-	c.sendPacket(packet)
-	c.VerbosePrintln("Hashing completed.")
-}
-
-func (c *Client) CompleteBufferSent() {
-	packet := &networking.Packet{
-		PacketType: networking.PacketTypeBufferSent,
-		Payload:    nil,
-	}
-
-	c.sendPacket(packet)
-	c.VerbosePrintln("Buffer sent.")
-}
-
-// handleHashing manages the hash verification process
-func (c *Client) handleHashing(packet *networking.Packet) {
-	c.DebugPrintln("Starting hashing phase...")
-	defer c.MonitorPauseContr.Resume()
-
-	var hashWg sync.WaitGroup
-
-	hashQueue := make(chan *networking.Packet, HashQueueSize)
-	hashQueue <- packet
-
-	hashWg.Add(1)
-	go c.initHashing(hashQueue, &hashWg)
-
-	// Process additional hash packets until complete
-	for {
-		packet := &networking.Packet{}
-		c.receivePacket(packet)
-
-		if c.CheckTermination() {
-			c.VerbosePrintln("Terminating hashing handler.")
-			return
-		}
-
-		// Handle different packet types during hash verification
-		switch packet.PacketType {
-		case networking.PacketTypeErrInit:
-			c.Println("ERROR: Remote and local devices do not have the same size.")
-			close(c.TermChan)
-		case networking.PacketTypeErrJournalCreation:
-			c.Println("ERROR: Can't create journal: Small backup disk.")
-			close(c.TermChan)
-		case networking.PacketTypeHash:
-			// Process each hash packet in parallel
-			hashQueue <- packet
-		case networking.PacketTypeHashError:
-			c.VerbosePrintln("ERROR: error occured on the remote side while hashing, retrying...")
-			close(hashQueue)
-			hashWg.Wait()
-			RetrySleep()
-			hashQueue = make(chan *networking.Packet, HashQueueSize)
-			hashWg.Add(1)
-			go c.initHashing(hashQueue, &hashWg)
-			c.InitiateCheckedReplication()
-			continue
-		case networking.PacketTypeInfoHashingCompleted:
-			close(hashQueue)
-			hashWg.Wait()
-			RetrySleep()
-			c.CompleteHashing()
-			c.VerbosePrintln("Hashing completed packet received, sending the buffer.")
-			if !c.SendBuffer() {
-				c.InitiateCheckedReplication()
-				hashQueue = make(chan *networking.Packet, HashQueueSize)
-				hashWg.Add(1)
-				go c.initHashing(hashQueue, &hashWg)
-				continue
-			}
-			c.CompleteBufferSent()
-			c.SetState(StateWriting)
-			return
-		case networking.PacketTypeErrorJournalFull:
-			c.VerbosePrintln("WARNING: Journal overflown.")
-			close(hashQueue)
-			hashWg.Wait()
-			RetrySleep()
-			hashQueue = make(chan *networking.Packet, HashQueueSize)
-			hashWg.Add(1)
-			go c.initHashing(hashQueue, &hashWg)
-			c.InitiateCheckedReplicationWithoutJournal()
-			continue
-		default:
-			c.VerbosePrintln("Unknown packet received while in hashing mode:", packet.PacketType)
-		}
-	}
-}
-
 // ListenPackets listens for incoming packets from the server
 func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	var hashWg sync.WaitGroup
+	defer hashWg.Wait()
+
+	hashQueue := make(chan *networking.Packet, HashPacketQueueSize)
+	defer close(hashQueue)
+
+	hashWg.Add(1)
+	go c.InitHashing(hashQueue, &hashWg)
+
 	for {
 		packet := &networking.Packet{}
-		c.receivePacket(packet)
+		c.ReceivePacket(packet)
 
 		if c.CheckTermination() {
 			c.VerbosePrintln("Terminating packet listener.")
 			return
 		}
 
-		// Handle different packet types
 		switch packet.PacketType {
-		case networking.PacketTypeErrInit:
-			c.Println("ERROR: Remote and local devices do not have the same size.")
-			close(c.TermChan)
-		case networking.PacketTypeHash:
-			// Start hash verification mode
-			c.handleHashing(packet)
-		case networking.PacketTypeHashError:
-			c.Println("ERROR: hash error accepted while not in hash mode")
+		case networking.PacketTypeInfoStartHashing:
+			close(hashQueue)
+			hashWg.Wait()
+
+			hashQueue = make(chan *networking.Packet, HashPacketQueueSize)
+
+			hashWg.Add(1)
+			go c.InitHashing(hashQueue, &hashWg)
+		case networking.PacketTypePayloadHash:
+			hashQueue <- packet
 		case networking.PacketTypeInfoHashingCompleted:
-			c.DebugPrintln("ERROR: hashing completed packet accepted while not in hash mode")
-		case networking.PacketTypeErrJournalCreation:
-			c.Println("ERROR: Can't create journal: Small backup disk.")
-			close(c.TermChan)
-		default:
-			c.VerbosePrintln("Unknown packet received:", packet.PacketType)
+			close(hashQueue)
+			hashWg.Wait()
+			c.ProcessBuffer()
+
+			hashQueue = make(chan *networking.Packet, HashPacketQueueSize)
 		}
 	}
 }
@@ -948,7 +824,7 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 func (c *Client) Run() {
 	c.Println("Starting bdr client connected to", c.Config.IpAddress, "and port", c.Config.Port)
 	if c.Config.InitialReplication {
-		c.InitiateCheckedReplication()
+		c.StartHashing()
 	}
 
 	// Start goroutines with wait group for clean shutdown
@@ -962,19 +838,14 @@ func (c *Client) Run() {
 	termWg.Add(1)
 	go c.ListenPackets(&termWg)
 
-	c.StartStatsPrinting(5 * time.Second)
+	c.StartStatsPrinting(BenchmarkPrintInterval * time.Second)
 
 	// Set up signal handling for graceful shutdown
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
 	// Wait for interrupt signal
-	select {
-	case <-signalChan:
-		c.Println("Interrupt signal received. Shutting down...")
-		close(c.TermChan)
-	case <-c.TermChan:
-	}
+	<-signalChan
 
 	// Initiate graceful shutdown
 	c.CloseClientConn()

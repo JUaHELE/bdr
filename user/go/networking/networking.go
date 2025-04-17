@@ -14,21 +14,17 @@ const (
 )
 
 const (
-	PacketTypeCmdGetHashes = iota
-	PacketTypeCmdGetHashesWithoutJournal
-	PacketTypeWriteInfo
-	PacketTypeInit
-	PacketTypeErrInit
-	PacketTypeErrorJournalFull
-	PacketTypeSha256
+	PacketTypeCmdStartHashing = iota
 	PacketTypeInfoHashingCompleted
-	PacketTypeHash
-	PacketTypeHashError
-	PacketTypeCorrectBlock
-	PacketTypeBitmapBlock
-	PacketTypeBufferSent
-	PacketTypeReplicationError
-	PacketTypeErrJournalCreation
+	PacketTypeInfoStartHashing
+	PacketTypeInfoInit
+	PacketTypeErrInit
+	PacketTypeErrInvalidSizes
+	PacketTypeErrHash
+	PacketTypeErrJournalCreate
+	PacketTypePayloadBufferWrite
+	PacketTypePayloadHash
+	PacketTypePayloadCorrectBlock
 )
 
 type CorrectBlockInfo struct {

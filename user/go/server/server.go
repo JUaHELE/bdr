@@ -25,6 +25,7 @@ import (
 const (
 	PollInterval  = 100 // in milliseconds - polling frequency
 	RetryInterval = 1   // seconds - time to wait between retries
+	BenchmarkPrintInterval = 10
 )
 
 const (
@@ -35,6 +36,7 @@ const (
 const (
 	WritePacketQueueSize   = 8 // number of writes that fit in the incoming queue; others wait
 	CorrectPacketQueueSize = 8 // numbers are chosen not to overwhelm the disk
+	JournalPacketQueueSize = 8
 )
 
 type State int
@@ -42,8 +44,8 @@ type State int
 const (
 	StateHashing State = iota
 	StateWriting
-	StateWritesToBuffet
-	StateJournalOverflown
+	StateDisconnected
+	StateDestroyingReplica
 )
 
 // RetrySleep pauses execution for RetryInterval seconds
@@ -74,8 +76,8 @@ func (s State) String() string {
 	return [...]string{
 		"Hashing",
 		"Writing",
-		"WritesToBuffer",
-		"JournalOverflown",
+		"Disconnected",
+		"DestroyingReplica",
 	}[s]
 }
 
@@ -142,57 +144,35 @@ func NewServer(cfg *Config) (*Server, error) {
 }
 
 // sendPacket sends a network packet, retrying until successful or terminated
-func (s *Server) sendPacket(packet *networking.Packet) {
+func (s *Server) SendPacket(packet *networking.Packet) error {
 	err := s.Encoder.Encode(packet)
 	if err != nil {
 		// Check if we should stop trying due to termination signal
-		s.DebugPrintln("SendPacket failed: ", err)
+		return fmt.Errorf("SendPacket failed: %v", err)
 	}
+
+	return nil
 }
 
-// receivePacket receives a network packet, retrying until successful or terminated
-func (s *Server) receivePacket(packet *networking.Packet) {
-	for {
-		err := s.Decoder.Decode(packet)
-		if err != nil {
-			// Check if we should stop trying due to termination signal
-			if terminated := s.CheckTermination(); terminated {
-				s.VerbosePrintln("Terminating attempt for successful packet send...")
-				return
-			}
-
-			s.VerbosePrintln("receivePacket failed: ", err)
-			RetrySleep()
-			continue
-		}
-		break
-	}
-}
-
-// CompleteHashing sends a notification that the hashing process is complete
-func (s *Server) CompleteHashing() {
+func CreateInfoPacket(packetType uint32) *networking.Packet {
 	packet := &networking.Packet{
-		PacketType: networking.PacketTypeInfoHashingCompleted,
+		PacketType: packetType,
 		Payload:    nil,
 	}
 
-	s.sendPacket(packet)
-	s.VerbosePrintln("Hashing completed.")
-}
-
-func (s *Server) SendReplicationError() {
-	packet := &networking.Packet{
-		PacketType: networking.PacketTypeReplicationError,
-		Payload:    nil,
-	}
-
-	s.sendPacket(packet)
-	s.VerbosePrintln("Hashing completed.")
+	return packet
 }
 
 // hashDiskAndSend reads the disk in chunks, computes hashes, and sends them to the client
-func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
+func (s *Server) HashDisk(termChan chan struct{}, hashedSpace uint64, wg *sync.WaitGroup) {
+	defer wg.Done()
 	s.VerbosePrintln("Hashing disk...")
+
+	packet := CreateInfoPacket(networking.PacketTypeInfoStartHashing)
+	err := s.SendPacket(packet)
+	if err != nil {
+		s.VerbosePrintln("Can't send hashing completion packet:", err)
+	}
 
 	// Number of worker goroutines to use
 	numWorkers := runtime.NumCPU()
@@ -333,11 +313,8 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 				if result.err != nil {
 					s.VerbosePrintln("Error while hashing disk:", result.err)
 					// Notify client about the error
-					errPacket := networking.Packet{
-						PacketType: networking.PacketTypeHashError,
-					}
-					s.sendPacket(&errPacket)
-					return
+					errPacket := CreateInfoPacket(networking.PacketTypeErrHash)
+					s.SendPacket(errPacket)
 				}
 
 				// Create hash information packet
@@ -347,18 +324,15 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 					Hash:   result.hash,
 				}
 				hashPacket := networking.Packet{
-					PacketType: networking.PacketTypeHash,
+					PacketType: networking.PacketTypePayloadHash,
 					Payload:    hashInfo,
 				}
 
 				// Send hash to client
 				if err := s.Encoder.Encode(&hashPacket); err != nil {
 					s.DebugPrintln("Error while sending complete hashing info:", err)
-					errPacket := networking.Packet{
-						PacketType: networking.PacketTypeHashError,
-					}
-					s.sendPacket(&errPacket)
-					return
+					errPacket := CreateInfoPacket(networking.PacketTypeErrHash)
+					s.SendPacket(errPacket)
 				}
 
 				totalBytesHashed += uint64(result.size)
@@ -370,8 +344,11 @@ func (s *Server) hashDiskAndSend(termChan chan struct{}, hashedSpace uint64) {
 	elapsed := hashTimer.Stop()
 	s.Stats.RecordHashing(elapsed, totalBytesHashed)
 
-	// Notify client that hashing is complete
-	s.CompleteHashing()
+	infoPacket := CreateInfoPacket(networking.PacketTypeInfoHashingCompleted)
+	err = s.SendPacket(infoPacket)
+	if err != nil {
+		s.VerbosePrintln("Can't send hashing completion packet:", err)
+	}
 }
 
 // CheckTermination checks if termination has been requested
@@ -417,48 +394,6 @@ func (s *Server) CloseClientConn() {
 }
 
 // handleWriteInfoPacket processes write requests from the client
-func (s *Server) handleWriteInfoPacket(writeChan chan *networking.Packet) {
-	for packet := range writeChan {
-		s.DebugPrintln("Write information packet received.")
-
-		// Extract write information from the packet
-		writeInfo, ok := packet.Payload.(networking.WriteInfo)
-		if !ok {
-			s.VerbosePrintln("invalid payload type for WriteInfo")
-		}
-
-		state := s.GetState()
-
-		if state == StateHashing {
-			continue
-		} else if state == StateWritesToBuffet {
-			for {
-				if err := s.WriteBufferWriteToJournal(&writeInfo); err != nil {
-					s.VerbosePrintln("Can't copy write into the buffer", err)
-					continue
-				}
-
-				break
-			}
-		} else {
-			// Calculate disk offset based on sector number and size
-			dataToWrite := writeInfo.Data[:writeInfo.Size]
-
-			s.Stats.RecordWrite(uint64(writeInfo.Size))
-
-			// Write data to the target device
-			for {
-				if _, err := s.TargetDevFd.WriteAt(dataToWrite, int64(writeInfo.Offset)); err != nil {
-					s.VerbosePrintln("Failed to write data to device:", err)
-					continue
-				}
-				break
-			}
-			
-			s.TargetDevFd.Sync()
-		}
-	}
-}
 
 func (s *Server) StartStatsPrinting(interval time.Duration) {
 	if !s.Config.Benchmark {
@@ -490,7 +425,7 @@ func (s *Server) WaitForInitInfo() error {
 	}
 
 	// Verify that we received the expected packet type
-	if packet.PacketType != networking.PacketTypeInit {
+	if packet.PacketType != networking.PacketTypeInfoInit {
 		return fmt.Errorf("expected init packet, got: %d", packet.PacketType)
 	}
 
@@ -507,48 +442,20 @@ func (s *Server) WaitForInitInfo() error {
 }
 
 // CheckValidSizes verifies that the client and server devices have the same size
-func (s *Server) CheckValidSizes() bool {
+func (s *Server) CheckValidSizes() error {
 	deviceSize, err := utils.GetDeviceSize(s.Config.TargetDevPath)
 	if err != nil || deviceSize != s.ClientInfo.DeviceSize {
 		// Send error packet to client
-		errPacket := networking.Packet{
-			PacketType: networking.PacketTypeErrInit,
-			Payload:    nil,
-		}
-
-		err := s.Encoder.Encode(errPacket)
-		if err != nil {
-			s.VerbosePrintln("Error when sending errInit packet")
-		}
-		s.Println("WARNING: Client has different size of the block device! Client: ", s.ClientInfo.DeviceSize, ", Server: ", deviceSize, "\n")
-		return false
-	} else {
-		s.VerbosePrintln("Client is acceptable.")
+		return fmt.Errorf("Client has different size of the block device")
 	}
-	return true
+	return nil
 }
 
-func (s *Server) SendJournalOverflow() {
-	packet := &networking.Packet{
-		PacketType: networking.PacketTypeErrorJournalFull,
-		Payload:    nil,
-	}
-
-	s.sendPacket(packet)
-	s.VerbosePrintln("Journal overflown.")
-}
-
-func (s *Server) SendErrorWhileJournalCreation() {
-	packet := &networking.Packet{
-		PacketType: networking.PacketTypeErrJournalCreation,
-		Payload:    nil,
-	}
-
-	s.sendPacket(packet)
-}
 
 // handleCorrectPacket writes a correct block to the target device based on client information
-func (s *Server) handleCorrectPacket(correctQueue chan *networking.Packet) {
+func (s *Server) HandleCorrectPackets(correctQueue chan *networking.Packet, wg *sync.WaitGroup) {
+	wg.Done()
+
 	for packet := range correctQueue {
 		// Extract correct block information
 		correctInfo, ok := packet.Payload.(networking.CorrectBlockInfo)
@@ -556,14 +463,85 @@ func (s *Server) handleCorrectPacket(correctQueue chan *networking.Packet) {
 			s.VerbosePrintln("invalid packet type for correctblock")
 		}
 		
-		state := s.GetState()
 		// Write the correct data to disk
-		if state == StateJournalOverflown {
-			s.WriteCorrectBlockToReplica(&correctInfo)
-		} else {
-			if err := s.WriteCorrectBlockToJournal(&correctInfo); err != nil {
-				s.SetState(StateJournalOverflown)
-				s.SendJournalOverflow()
+		err := s.WriteCorrectBlockToReplica(&correctInfo)
+		if err != nil {
+			s.VerbosePrintln("Can't write block to replica:", err)
+		}
+	}
+}
+
+func (s *Server) HandleWritePackets(writeQueue chan *networking.Packet, wg *sync.WaitGroup) {
+	wg.Done()
+
+	for packet := range writeQueue {
+		s.DebugPrintln("Write information packet received.")
+
+		// Extract write information from the packet
+		writeInfo, ok := packet.Payload.(networking.WriteInfo)
+		if !ok {
+			s.VerbosePrintln("invalid payload type for WriteInfo")
+		}
+
+		// Calculate disk offset based on sector number and size
+		dataToWrite := writeInfo.Data[:writeInfo.Size]
+
+		s.Stats.RecordWrite(uint64(writeInfo.Size))
+
+		// Write data to the target device
+		for {
+			if _, err := s.TargetDevFd.WriteAt(dataToWrite, int64(writeInfo.Offset)); err != nil {
+				s.VerbosePrintln("Failed to write data to device:", err)
+				continue
+			}
+			break
+		}
+		s.TargetDevFd.Sync()
+	}
+}
+
+func (s *Server) HandleJournalBufferWrite(packet *networking.Packet) error {
+	writeInfo, ok := packet.Payload.(networking.WriteInfo)
+	if !ok {
+		fmt.Errorf("Invalid payload type for WriteInfo")
+	}
+ 
+	err := s.WriteBufferWriteToJournal(&writeInfo)
+	if err != nil {
+		fmt.Errorf("Can't write buffer write to replica: %v", err)
+	}
+
+	return nil
+}
+
+func (s *Server) HandleJournalCorrectBlock(packet *networking.Packet) error {
+	correctInfo, ok := packet.Payload.(networking.CorrectBlockInfo)
+	if !ok {
+		return fmt.Errorf("invalid packet type for CorrectBlockInfo")
+	}
+	
+	err := s.WriteCorrectBlockToJournal(&correctInfo);
+	if err != nil {
+		return fmt.Errorf("Can't write buffer write to replica: %v", err)
+	}
+
+	return nil
+}
+
+func (s *Server) HandleJournalPackets(journalQueue chan *networking.Packet, wg *sync.WaitGroup) {
+	wg.Done()
+
+	for packet := range journalQueue {
+		switch packet.PacketType {
+		case networking.PacketTypePayloadBufferWrite:
+			err := s.HandleJournalBufferWrite(packet)
+			if err != nil {
+				s.VerbosePrintln("Journal packet handle failed:", err)
+			}
+		case networking.PacketTypePayloadCorrectBlock:
+			err := s.HandleJournalCorrectBlock(packet)
+			if err != nil {
+				s.VerbosePrintln("Journal packet handle failed:", err)
 			}
 		}
 	}
@@ -573,6 +551,7 @@ func (s *Server) WriteJournalToReplica() {
 	s.Journal.Validate()
 
 	s.VerbosePrintln("Writing journal to replica...")
+	s.VerbosePrintln("Writing correct blocks...")
 	for i := uint64(0); i < s.Journal.CorrectOffset; {
 		correctBlock, err := s.Journal.ReadCorrectBlock(i)
 		if err != nil {
@@ -591,10 +570,11 @@ func (s *Server) WriteJournalToReplica() {
 		i++
 	}
 
+	s.VerbosePrintln("Writing buffer writes...")
 	for i := uint64(0); i < s.Journal.WriteOffset; {
 		bufferWrite, err := s.Journal.ReadBufferWrite(i)
 		if err != nil {
-			s.VerbosePrintln("Can't write buffer write from journal to replica", err)
+			s.VerbosePrintln("Can't read buffer write from journal:", err)
 			RetrySleep()
 			continue
 		}
@@ -605,6 +585,7 @@ func (s *Server) WriteJournalToReplica() {
 		// Write data to the target device
 		if _, err := s.TargetDevFd.WriteAt(dataToWrite, int64(bufferWrite.Offset)); err != nil {
 			s.VerbosePrintln("Failed to write data to device:", err)
+			RetrySleep()
 			continue
 		}
 
@@ -647,53 +628,69 @@ func (s *Server) CreateJournal() error {
 func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	defer s.CloseClientConn()
 	defer wg.Done()
-	defer s.SetState(StateWriting)
+	defer s.SetState(StateDisconnected)
 
+	s.SetState(StateWriting)
 	s.Println("Accepted connection from", s.Conn.RemoteAddr())
 
-	var childWg sync.WaitGroup
-	childWg.Wait()
-	// Channel to signal hashing process termination
-	hashingTermChan := make(chan struct{})
-
-	// Queue for write operations
-	writeQueue := make(chan *networking.Packet, WritePacketQueueSize)
-	defer close(writeQueue)
-
-	// Start a goroutine to handle write operations
-	childWg.Add(1)
-	go func() {
-		defer childWg.Done()
-		s.handleWriteInfoPacket(writeQueue)
-	}()
-
-	// Wait for and process client initialization information
 	if err := s.WaitForInitInfo(); err != nil {
-		s.Println("Error occurred while waiting on init packet:", err)
+		s.VerbosePrintln("Error occured while waiting for init info:", err)
+
+		errPacket := CreateInfoPacket(networking.PacketTypeErrInit)
+		err := s.SendPacket(errPacket)
+		if err != nil {
+			s.VerbosePrintln("Can't send PacketTypeErrInit packet:", err)
+		}
 		return
 	}
 
 	// Verify device sizes match
-	if valid := s.CheckValidSizes(); !valid {
+	if err := s.CheckValidSizes(); err != nil {
+		s.Println("Source device and replica don't have the same size")
+
+		errPacket := CreateInfoPacket(networking.PacketTypeErrInvalidSizes)
+		err := s.SendPacket(errPacket)
+		if err != nil {
+			s.VerbosePrintln("Can't send init info packet:", err)
+		}
 		return
 	}
 
 	if err := s.CreateJournal(); err != nil {
-		s.Println("Error occured while creating journal:", err)
-		s.SendErrorWhileJournalCreation()
+		s.Println("Can't create journal:", err)
+		errPacket := CreateInfoPacket(networking.PacketTypeErrJournalCreate)
+		s.SendPacket(errPacket)
 		return
 	}
+
+	var childWg sync.WaitGroup
+	defer childWg.Wait()
+
+	var hashWg sync.WaitGroup
+	defer hashWg.Wait()
+
+	hashTermChan := make(chan struct{})
+	defer close(hashTermChan)
+
+	// QueueWriteBufferWriteToReplica for write operations
+	writeQueue := make(chan *networking.Packet, WritePacketQueueSize)
+	defer close(writeQueue)
+
+	childWg.Add(1)
+	go s.HandleWritePackets(writeQueue, &childWg)
+
+	journalQueue := make(chan *networking.Packet, JournalPacketQueueSize)
+	defer close(journalQueue)
+
+	childWg.Add(1)
+	go s.HandleJournalPackets(journalQueue, &childWg)
 
 	correctQueue := make(chan *networking.Packet, CorrectPacketQueueSize)
 	defer close(correctQueue)
 
 	childWg.Add(1)
-	go func() {
-		defer childWg.Done()
-		s.handleCorrectPacket(correctQueue)
-	}()
+	go s.HandleCorrectPackets(correctQueue, &childWg)
 
-	// Main packet processing loop
 	for {
 		if s.CheckTermination() {
 			s.VerbosePrintln("Terminating client handler.")
@@ -713,52 +710,32 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 
 		// Handle packet based on type
 		switch packet.PacketType {
-		case networking.PacketTypeCmdGetHashes:
-			// Start a fresh hashing process
-			close(hashingTermChan)
-			for len(hashingTermChan) > 0 {
-				time.Sleep(time.Millisecond * 10)
-			}
+		case networking.PacketTypeCmdStartHashing:
 			s.SetState(StateHashing)
-			s.VerbosePrintln("Reseting journal...")
-			s.Journal.Reset()
-			s.VerbosePrintln("Journal reset...")
-			hashingTermChan = make(chan struct{})
-			childWg.Add(1)
-			go func() {
-				defer childWg.Done()
-				s.hashDiskAndSend(hashingTermChan, networking.HashedSpaceBase)
-			}()
-		case networking.PacketTypeCmdGetHashesWithoutJournal:
-			s.VerbosePrintln("Hashing without journal. Blocks are written directly to replica.")
-			close(hashingTermChan)
-			for len(hashingTermChan) > 0 {
-				time.Sleep(time.Millisecond * 10)
+
+			close(hashTermChan)
+			hashWg.Wait()
+
+			hashTermChan = make(chan struct{})
+			hashWg.Add(1)
+			go s.HashDisk(hashTermChan, networking.HashedSpaceBase, &hashWg)
+		case networking.PacketTypePayloadBufferWrite:
+			state := s.GetState()
+
+			if state == StateHashing {
+				journalQueue <- packet
+			} else if state == StateWriting {
+				writeQueue <- packet
 			}
-			hashingTermChan = make(chan struct{})
-			childWg.Add(1)
-			go func() {
-				defer childWg.Done()
-				s.hashDiskAndSend(hashingTermChan, networking.HashedSpaceBase)
-			}()
-		case networking.PacketTypeWriteInfo:
-			// Queue write operation
-			writeQueue <- packet
-		case networking.PacketTypeCorrectBlock:
-			// Process correct block
-			correctQueue <- packet
+		case networking.PacketTypePayloadCorrectBlock:
+			state := s.GetState()
+
+			if state == StateHashing {
+				journalQueue <- packet
+			} else if state == StateDestroyingReplica {
+				correctQueue <- packet
+			}
 		case networking.PacketTypeInfoHashingCompleted:
-			if s.GetState() == StateJournalOverflown {
-				s.SetState(StateWriting)
-			} else {
-				s.SetState(StateWritesToBuffet)
-			}
-		case networking.PacketTypeBufferSent:
-			for len(correctQueue) > 0 || len(writeQueue) > 0 {
-				time.Sleep(time.Millisecond * 10)
-			}
-			RetrySleep()
-			s.WriteJournalToReplica()
 			s.SetState(StateWriting)
 		default:
 			s.VerbosePrintln("Unknown packet received:", packet.PacketType)
@@ -808,8 +785,8 @@ func (s *Server) HandleConnections(wg *sync.WaitGroup) {
 
 		// Start client handler
 		var clientWg sync.WaitGroup
-		clientWg.Add(1)
 
+		clientWg.Add(1)
 		go s.HandleClient(&clientWg)
 		clientWg.Wait()
 
@@ -819,6 +796,7 @@ func (s *Server) HandleConnections(wg *sync.WaitGroup) {
 
 func (s *Server) WriteCorrectBlockToJournal(correctBlock *networking.CorrectBlockInfo) error {
 	s.DebugPrintln("Writing correct block to journal on offset", s.Journal.CorrectOffset)
+
 	err := s.Journal.WriteCorrectBlock(s.Journal.CorrectOffset, correctBlock)
 	if err != nil {
 		return err
@@ -842,62 +820,56 @@ func (s *Server) WriteBufferWriteToJournal(bufferWrite *networking.WriteInfo) er
 	return nil
 }
 
-func (s *Server) WriteCorrectBlockToReplica(correctBlock *networking.CorrectBlockInfo) {
-	for {
-		// Write the correct data to disk
-		if _, err := s.TargetDevFd.WriteAt(correctBlock.Data, int64(correctBlock.Offset)); err != nil {
-			s.VerbosePrintln("Can't write correct block")
-			RetrySleep()
-			continue
-		}
-		break
+func (s *Server) WriteCorrectBlockToReplica(correctBlock *networking.CorrectBlockInfo) error {
+	// Write the correct data to disk
+	if _, err := s.TargetDevFd.WriteAt(correctBlock.Data, int64(correctBlock.Offset)); err != nil {
+		return fmt.Errorf("Failed to write buffer write to replica: %v", err)
 	}
+
+	return nil
 }
 
-func (s *Server) WriteBufferWriteToReplica(bufferWrite *networking.WriteInfo) {
-	for {
-		// Write the correct data to disk
-		dataToWrite := bufferWrite.Data[:bufferWrite.Size]
+func (s *Server) WriteBufferWriteToReplica(bufferWrite *networking.WriteInfo) error {
+	// Write the correct data to disk
+	dataToWrite := bufferWrite.Data[:bufferWrite.Size]
 
-		// Write data to the target device
-		if _, err := s.TargetDevFd.WriteAt(dataToWrite, int64(bufferWrite.Offset)); err != nil {
-			s.VerbosePrintln("Failed to write data to device:", err)
-		}
-
-		s.TargetDevFd.Sync()
-		break
+	// Write data to the target device
+	if _, err := s.TargetDevFd.WriteAt(dataToWrite, int64(bufferWrite.Offset)); err != nil {
+		return fmt.Errorf("Failed to write buffer write to device: %v", err)
 	}
+
+	s.TargetDevFd.Sync()
+
+	return nil
 }
 
 
-func (s *Server) CopyJournalToReplica(jrn *journal.Journal) {
+func (s *Server) CopyJournalToReplica(jrn *journal.Journal) error {
 	for i := uint64(0); i < jrn.CorrectOffset; {
 		correctBlock, err := jrn.ReadCorrectBlock(i)
 		if err != nil {
-			s.Println("Can't copy journal to replica:", err)
-			RetrySleep()
-			continue
+			return fmt.Errorf("Failed to copy journal to replica: %v", err)
 		}
 
 		s.WriteCorrectBlockToReplica(correctBlock)
 		i++
 	}
-
 	s.TargetDevFd.Sync()
 
 	for i := uint64(0); i < jrn.WriteOffset; {
 		correctBlock, err := jrn.ReadBufferWrite(i)
 		if err != nil {
-			s.Println("Can't copy journal to replica:", err)
-			RetrySleep()
-			continue
+			return fmt.Errorf("Failed to copy journal to replica: %v", err)
 		}
 
 		s.WriteBufferWriteToReplica(correctBlock)
 		i++
 	}
 
-	s.VerbosePrintln("Journal copyied into replica.")
+	s.VerbosePrintln("Journal copied into replica.")
+	jrn.Invalidate()
+
+	return nil
 }
 
 func (s *Server) CheckJournal() error {
@@ -916,9 +888,10 @@ func (s *Server) CheckJournal() error {
 	s.Println("Journal on specified path is valid, copying the journal to replica...")
 	s.VerbosePrintln(jrn.String())
 
-	s.CopyJournalToReplica(jrn)
-
-	jrn.Invalidate()
+	err = s.CopyJournalToReplica(jrn)
+	if err != nil {
+		return fmt.Errorf("Failed to copy journal to replica: %v", err)
+	}
 
 	return nil
 }
@@ -938,7 +911,7 @@ func (s *Server) Run() {
 	termWg.Add(1)
 	go s.HandleConnections(&termWg)
 
-	s.StartStatsPrinting(10 * time.Second)
+	s.StartStatsPrinting(BenchmarkPrintInterval * time.Second)
 
 	// Set up signal handling for graceful shutdown
 	signalChan := make(chan os.Signal, 1)
