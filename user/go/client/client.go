@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+	"sync/atomic"
 
 	xxhash "github.com/zeebo/xxh3"
 )
@@ -111,9 +112,9 @@ var (
 )
 
 const (
-	PollInterval  = 100 // Polling interval in milliseconds
-	RetryInterval = 1   // Retry interval in seconds
-	ReadInterval  = 5
+	PollInterval           = 100 // Polling interval in milliseconds
+	RetryInterval          = 1   // Retry interval in seconds
+	ReadInterval           = 5
 	BenchmarkPrintInterval = 10 // seconds
 )
 
@@ -229,10 +230,16 @@ func (c *Client) executeIOCTL(cmd uintptr, arg uintptr) error {
 // serveIOCTL is a wrapper around ioctl calls that retries until successful or termination
 func (c *Client) ServeIOCTL(cmd uintptr, arg uintptr) {
 	for {
+		// Check for termination BEFORE attempting IOCTL
+		if terminated := c.CheckTermination(); terminated {
+			c.VerbosePrintln("Terminating IOCTL operation due to shutdown...")
+			return
+		}
+
 		err := c.executeIOCTL(cmd, arg)
 		if err != nil {
 			if terminated := c.CheckTermination(); terminated {
-				c.VerbosePrintln("Terminating attepmt for successfull ioctls...")
+				c.VerbosePrintln("Terminating attempt for successful ioctls...")
 				return
 			}
 
@@ -294,15 +301,28 @@ func (c *Client) reconnectToServer() {
 // receivePacket receives a network packet, reconnecting if necessary
 func (c *Client) ReceivePacket(packet *networking.Packet) {
 	for {
+		if terminated := c.CheckTermination(); terminated {
+			c.VerbosePrintln("Terminating packet receive due to shutdown...")
+			return
+		}
+
+		if c.Conn != nil {
+			c.Conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		}
+
 		err := c.Decoder.Decode(packet)
 		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				// This was a timeout, just retry with termination check
+				continue
+			}
+
 			if terminated := c.CheckTermination(); terminated {
-				c.VerbosePrintln("Terminating attepmt for successfull packet send...")
+				c.VerbosePrintln("Terminating attempt for successful packet receive...")
 				return
 			}
 
 			if err == io.EOF {
-				// Connection lost, try to reconnect
 				c.reconnectToServer()
 				continue
 			}
@@ -315,7 +335,6 @@ func (c *Client) ReceivePacket(packet *networking.Packet) {
 	}
 }
 
-// SendInitPacket sends an initialization packet with device information
 func (c *Client) SendInitPacket(device string) error {
 	// Get total size of the device
 	deviceSize, err := utils.GetDeviceSize(device)
@@ -643,48 +662,42 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 
 func (c *Client) InitHashing(hashChan chan *networking.Packet, hashWg *sync.WaitGroup) {
 	defer hashWg.Done()
-
 	numWorkers := runtime.NumCPU()
-
 	type workItem struct {
 		hashInfo networking.HashInfo
 		buffer   []byte
 	}
-
 	type compItem struct {
 		hashInfo networking.HashInfo
 		buffer   []byte
 		hash     uint64
 	}
-
 	workChan := make(chan workItem, numWorkers)
 	compChan := make(chan compItem, numWorkers)
-
 	hashTimer := benchmark.NewTimer("Hash processing")
 	totalBytesHashed := uint64(0)
-
+	
+	// First stage: Read from hashChan and produce work items
+	var hashReadWg sync.WaitGroup
+	hashReadWg.Add(numWorkers)
 	go func() {
 		defer close(workChan)
-
-		var wg sync.WaitGroup
 		for i := 0; i < numWorkers; i++ {
-			wg.Add(1)
 			go func() {
-				defer wg.Done()
-
+				defer hashReadWg.Done()
 				for packet := range hashChan {
 					hashInfo, ok := packet.Payload.(networking.HashInfo)
 					if !ok {
 						c.VerbosePrintln("invalid payload for type for HashInfo")
 						c.StartHashing()
+						continue
 					}
-
 					buf := make([]byte, hashInfo.Size)
 					if _, err := c.UnderDevFile.ReadAt(buf, int64(hashInfo.Offset)); err != nil && err != io.EOF {
 						c.VerbosePrintln("Error while reading the disk...")
 						c.StartHashing()
+						continue
 					}
-
 					workChan <- workItem{
 						hashInfo: hashInfo,
 						buffer:   buf,
@@ -692,40 +705,37 @@ func (c *Client) InitHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 				}
 			}()
 		}
-		wg.Wait()
+		hashReadWg.Wait()
 	}()
-
+	
+	// Second stage: Process work items and compute hashes
+	var workWg sync.WaitGroup
+	workWg.Add(numWorkers)
 	go func() {
 		defer close(compChan)
-
-		var wg sync.WaitGroup
 		for i := 0; i < numWorkers; i++ {
-			wg.Add(1)
 			go func() {
-				defer wg.Done()
-
+				defer workWg.Done()
 				for work := range workChan {
 					hash := xxhash.Hash(work.buffer)
-
 					compChan <- compItem{
 						hashInfo: work.hashInfo,
 						buffer:   work.buffer,
 						hash:     hash,
 					}
-
-					totalBytesHashed += uint64(work.hashInfo.Size)
+					atomic.AddUint64(&totalBytesHashed, uint64(work.hashInfo.Size))
 				}
 			}()
 		}
-		wg.Wait()
+		workWg.Wait()
 	}()
-
+	
+	// Final stage: Compare hashes and handle mismatches
 	var compWg sync.WaitGroup
+	compWg.Add(numWorkers)
 	for i := 0; i < numWorkers; i++ {
-		compWg.Add(1)
 		go func() {
 			defer compWg.Done()
-
 			for comp := range compChan {
 				if comp.hash != comp.hashInfo.Hash {
 					c.DebugPrintln("Blocks are not equal")
@@ -739,6 +749,7 @@ func (c *Client) InitHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 	}
 
 	compWg.Wait()
+
 	elapsed := hashTimer.Stop()
 	c.Stats.RecordHashing(elapsed, totalBytesHashed)
 }
@@ -757,6 +768,8 @@ func (c *Client) ProcessBuffer() {
 }
 
 func (c *Client) SendBuffer() bool {
+	c.VerbosePrintln("Sending buffer.")
+
 	var bufferInfo BufferInfo
 	c.ServeIOCTL(BDR_CMD_READ_BUFFER_INFO, uintptr(unsafe.Pointer(&bufferInfo)))
 	// Check if there are new writes to process
@@ -785,10 +798,7 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 	defer hashWg.Wait()
 
 	hashQueue := make(chan *networking.Packet, HashPacketQueueSize)
-	defer close(hashQueue)
-
-	hashWg.Add(1)
-	go c.InitHashing(hashQueue, &hashWg)
+	// defer close(hashQueue)
 
 	for {
 		packet := &networking.Packet{}
@@ -796,11 +806,14 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 
 		if c.CheckTermination() {
 			c.VerbosePrintln("Terminating packet listener.")
+			close(hashQueue)
 			return
 		}
 
 		switch packet.PacketType {
 		case networking.PacketTypeInfoStartHashing:
+			c.VerbosePrintln("Server started hashing.")
+
 			close(hashQueue)
 			hashWg.Wait()
 
@@ -811,11 +824,14 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 		case networking.PacketTypePayloadHash:
 			hashQueue <- packet
 		case networking.PacketTypeInfoHashingCompleted:
+			c.VerbosePrintln("Server completed hashing.")
+
 			close(hashQueue)
 			hashWg.Wait()
 			c.ProcessBuffer()
 
 			hashQueue = make(chan *networking.Packet, HashPacketQueueSize)
+
 		}
 	}
 }
@@ -846,6 +862,9 @@ func (c *Client) Run() {
 
 	// Wait for interrupt signal
 	<-signalChan
+
+	c.Println("Interrupt signal received. Shutting down...")
+	close(c.TermChan)
 
 	// Initiate graceful shutdown
 	c.CloseClientConn()

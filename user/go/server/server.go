@@ -330,7 +330,11 @@ func (s *Server) HashDisk(termChan chan struct{}, hashedSpace uint64, wg *sync.W
 
 				// Send hash to client
 				if err := s.Encoder.Encode(&hashPacket); err != nil {
-					s.DebugPrintln("Error while sending complete hashing info:", err)
+					if utils.IsConnectionClosed(err) {
+						return
+					}
+
+					s.DebugPrintln("Error while sending hashing info:", err)
 					errPacket := CreateInfoPacket(networking.PacketTypeErrHash)
 					s.SendPacket(errPacket)
 				}
@@ -347,6 +351,10 @@ func (s *Server) HashDisk(termChan chan struct{}, hashedSpace uint64, wg *sync.W
 	infoPacket := CreateInfoPacket(networking.PacketTypeInfoHashingCompleted)
 	err = s.SendPacket(infoPacket)
 	if err != nil {
+		if utils.IsConnectionClosed(err) {
+			return
+		}
+
 		s.VerbosePrintln("Can't send hashing completion packet:", err)
 	}
 }
@@ -626,8 +634,8 @@ func (s *Server) CreateJournal() error {
 
 // HandleClient manages a connected client session
 func (s *Server) HandleClient(wg *sync.WaitGroup) {
-	defer s.CloseClientConn()
 	defer wg.Done()
+	defer s.CloseClientConn()
 	defer s.SetState(StateDisconnected)
 
 	s.SetState(StateWriting)
@@ -670,7 +678,6 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	defer hashWg.Wait()
 
 	hashTermChan := make(chan struct{})
-	defer close(hashTermChan)
 
 	// QueueWriteBufferWriteToReplica for write operations
 	writeQueue := make(chan *networking.Packet, WritePacketQueueSize)
@@ -694,14 +701,15 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	for {
 		if s.CheckTermination() {
 			s.VerbosePrintln("Terminating client handler.")
+			close(hashTermChan)
 			return
 		}
 
 		// Receive next packet
 		packet := &networking.Packet{}
 		if err := s.Decoder.Decode(packet); err != nil {
-			if err == io.EOF {
-				s.Println("Connection closed by the client.")
+			if utils.IsConnectionClosed(err) {
+				close(hashTermChan)
 				return
 			}
 			s.DebugPrintln("Failed to decode packet:", err)
@@ -711,6 +719,8 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		// Handle packet based on type
 		switch packet.PacketType {
 		case networking.PacketTypeCmdStartHashing:
+			s.VerbosePrintln("Starting hashing...")
+
 			s.SetState(StateHashing)
 
 			close(hashTermChan)
@@ -736,6 +746,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 				correctQueue <- packet
 			}
 		case networking.PacketTypeInfoHashingCompleted:
+			s.VerbosePrintln("Hashing completed.")
 			s.SetState(StateWriting)
 		default:
 			s.VerbosePrintln("Unknown packet received:", packet.PacketType)

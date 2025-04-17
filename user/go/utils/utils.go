@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"testing"
 	"unsafe"
+	"errors"
+	"io"
 )
 
 func Bit(nr uint) uint32 { return 1 << nr }
@@ -36,6 +38,20 @@ func AssertInRange(t *testing.T, value, min, max uint64, name string) {
 	if value < min || value > max {
 		t.Errorf("%s (%d) not in range [%d, %d]", name, value, min, max)
 	}
+}
+
+func IsConnectionClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check common error strings for closed connections
+	errStr := err.Error()
+	return strings.Contains(errStr, "connection reset by peer") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "use of closed network connection") ||
+		errors.Is(err, io.EOF)
 }
 
 func ChanHasTerminated(termChan chan struct{}) bool {
