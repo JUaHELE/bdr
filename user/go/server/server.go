@@ -166,12 +166,19 @@ func CreateInfoPacket(packetType uint32) *networking.Packet {
 // hashDiskAndSend reads the disk in chunks, computes hashes, and sends them to the client
 func (s *Server) HashDisk(termChan chan struct{}, hashedSpace uint64, wg *sync.WaitGroup) {
 	defer wg.Done()
+
+	s.VerbosePrintln("Reseting journal...")
+	s.Journal.ResetTo(s.Journal.WriteOffset, s.Journal.CorrectOffset)
+
 	s.VerbosePrintln("Hashing disk...")
 
 	packet := CreateInfoPacket(networking.PacketTypeInfoStartHashing)
 	err := s.SendPacket(packet)
 	if err != nil {
-		s.VerbosePrintln("Can't send hashing completion packet:", err)
+		if utils.IsConnectionClosed(err) {
+			return
+		}
+		s.VerbosePrintln("Can't send starting completion packet:", err)
 	}
 
 	// Number of worker goroutines to use
@@ -555,7 +562,15 @@ func (s *Server) HandleJournalPackets(journalQueue chan *networking.Packet, wg *
 	}
 }
 
-func (s *Server) WriteJournalToReplica() {
+func (s *Server) HandleJournalWriting() {
+	err := s.WriteJournalToReplica()
+	if err != nil {
+		s.VerbosePrintln("Can't write journal to replica:", err)
+		// TODO: send journal overflown
+	}
+}
+
+func (s *Server) WriteJournalToReplica() error {
 	s.Journal.Validate()
 
 	s.VerbosePrintln("Writing journal to replica...")
@@ -563,28 +578,23 @@ func (s *Server) WriteJournalToReplica() {
 	for i := uint64(0); i < s.Journal.CorrectOffset; {
 		correctBlock, err := s.Journal.ReadCorrectBlock(i)
 		if err != nil {
-			s.VerbosePrintln("Can't write buffer write from journal to replica:", err)
-			RetrySleep()
-			continue
+			return fmt.Errorf("Can't read correct block from journal:", err)
 		}
 
 		// Write the correct data to disk
 		if _, err := s.TargetDevFd.WriteAt(correctBlock.Data, int64(correctBlock.Offset)); err != nil {
-			s.VerbosePrintln("Can't write correct block")
-			RetrySleep()
-			continue
+			return fmt.Errorf("Can't write correct block:", err)
 		}
 
 		i++
 	}
+	s.TargetDevFd.Sync()
 
 	s.VerbosePrintln("Writing buffer writes...")
 	for i := uint64(0); i < s.Journal.WriteOffset; {
 		bufferWrite, err := s.Journal.ReadBufferWrite(i)
 		if err != nil {
-			s.VerbosePrintln("Can't read buffer write from journal:", err)
-			RetrySleep()
-			continue
+			return fmt.Errorf("Can't read buffer write from journal:", err)
 		}
 
 
@@ -592,9 +602,7 @@ func (s *Server) WriteJournalToReplica() {
 
 		// Write data to the target device
 		if _, err := s.TargetDevFd.WriteAt(dataToWrite, int64(bufferWrite.Offset)); err != nil {
-			s.VerbosePrintln("Failed to write data to device:", err)
-			RetrySleep()
-			continue
+			return fmt.Errorf("Can't write buffer write:", err)
 		}
 
 		s.TargetDevFd.Sync()
@@ -602,9 +610,14 @@ func (s *Server) WriteJournalToReplica() {
 		i++
 	}
 
-	s.Journal.Invalidate()
+	err := s.Journal.Invalidate()
+	if err != nil {
+		return fmt.Errorf("Can't invalidate the journal:", err)
+	}
 
 	s.VerbosePrintln("Journal sucessfully written to replica.")
+
+	return nil
 }
 
 func (s *Server) CreateJournal() error {
@@ -747,6 +760,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			}
 		case networking.PacketTypeInfoHashingCompleted:
 			s.VerbosePrintln("Hashing completed.")
+			s.HandleJournalWriting()
 			s.SetState(StateWriting)
 		default:
 			s.VerbosePrintln("Unknown packet received:", packet.PacketType)

@@ -361,8 +361,8 @@ func NewJournal(diskPath string, sectionBufWritesSize uint64, bufWriteByteSize u
 	journal := &Journal{
 		disk:     disk,
 		diskSize: diskSize,
-		WriteOffset: 0,
-		CorrectOffset: 0,
+		WriteOffset: sectionBufWritesSize / bufWriteByteSize,
+		CorrectOffset: sectionCorBlocksSize / corrBlockByteSize,
 		header:   header,
 	}
 
@@ -373,6 +373,73 @@ func GetInvalidCorrectBlock() *networking.CorrectBlockInfo {
 	return &networking.CorrectBlockInfo{
 		Size: 0,
 	}
+}
+
+func (j *Journal) ClearCorrectBlockSectionTo(correctBlockOff uint64) error {
+	if correctBlockOff > j.header.corrBlocksCount {
+		return ErrInvalidSize
+	}
+
+	invalidCorrectBlock := GetInvalidCorrectBlock()
+	blockData := make([]byte, j.header.corrBlockByteSize)
+
+	serializeCorrectBlockInfo(invalidCorrectBlock, blockData)
+
+	for i := uint64(0); i < correctBlockOff; i++ {
+		offset := j.header.corrBlocksStartOffset + uint64(i)*j.header.corrBlockByteSize
+
+		_, err := j.disk.WriteAt(blockData, int64(offset))
+		if err != nil {
+			return ErrIOFailure
+		}
+	}
+
+	return nil
+}
+
+func (j *Journal) ClearWriteSectionTo(bufferWriteOff uint64) error {
+	if bufferWriteOff > j.header.bufWritesCount {
+		return ErrInvalidSize
+	}
+
+	invalidWrite := GetInvalidWrite()
+	writeData := make([]byte, j.header.bufWriteByteSize)
+
+	serializeWriteInfo(invalidWrite, writeData)
+
+	for i := uint64(0); i < bufferWriteOff; i++ {
+		offset := j.header.bufWritesStartOffset + uint64(i)*j.header.bufWriteByteSize
+
+		_, err := j.disk.WriteAt(writeData, int64(offset))
+		if err != nil {
+			return ErrIOFailure
+		}
+	}
+	return nil
+}
+
+
+func (j *Journal) ResetTo(bufferWriteOff uint64, correctBlockOff uint64) error {
+	err := j.Invalidate()
+	if err != nil {
+		return err
+	}
+
+	err = j.ClearWriteSectionTo(bufferWriteOff)
+	if err != nil {
+		return err
+	}
+
+	err = j.ClearCorrectBlockSectionTo(correctBlockOff)
+	if err != nil {
+		return err
+	}
+
+	j.WriteOffset = 0
+	j.CorrectOffset = 0
+
+	return nil
+
 }
 
 func (j *Journal) Reset() error {

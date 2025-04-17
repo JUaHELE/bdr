@@ -798,7 +798,6 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 	defer hashWg.Wait()
 
 	hashQueue := make(chan *networking.Packet, HashPacketQueueSize)
-	// defer close(hashQueue)
 
 	for {
 		packet := &networking.Packet{}
