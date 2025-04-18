@@ -16,10 +16,10 @@ import (
 	"os/signal"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
-	"sync/atomic"
 
 	xxhash "github.com/zeebo/xxh3"
 )
@@ -98,6 +98,15 @@ func (c *Client) SetState(newState State) {
 	c.state = newState
 
 	c.VerbosePrintln("Client transitioned from", oldState, "to", newState, "\n")
+}
+
+func (c *Client) InitiateShutdown() {
+	select {
+	case <-c.TermChan:
+		// already closed
+	default:
+		close(c.TermChan)
+	}
 }
 
 var (
@@ -676,7 +685,7 @@ func (c *Client) InitHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 	compChan := make(chan compItem, numWorkers)
 	hashTimer := benchmark.NewTimer("Hash processing")
 	totalBytesHashed := uint64(0)
-	
+
 	// First stage: Read from hashChan and produce work items
 	var hashReadWg sync.WaitGroup
 	hashReadWg.Add(numWorkers)
@@ -707,7 +716,7 @@ func (c *Client) InitHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 		}
 		hashReadWg.Wait()
 	}()
-	
+
 	// Second stage: Process work items and compute hashes
 	var workWg sync.WaitGroup
 	workWg.Add(numWorkers)
@@ -729,7 +738,7 @@ func (c *Client) InitHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 		}
 		workWg.Wait()
 	}()
-	
+
 	// Final stage: Compare hashes and handle mismatches
 	var compWg sync.WaitGroup
 	compWg.Add(numWorkers)
@@ -839,16 +848,16 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 			c.Println("Use with cautious, because the replica will be corrupted while scanning.")
 			c.Println("It is advised to resize the journal or backup the replica.")
 
-			return
+			c.InitiateShutdown()
 		case networking.PacketTypeErrInit:
 			c.Println("ERROR: can't verify init info.")
-			return
+			c.InitiateShutdown()
 		case networking.PacketTypeErrInvalidSizes:
 			c.Println("ERROR: source disk and replica do not have the same size.")
-			return
+			c.InitiateShutdown()
 		case networking.PacketTypeErrJournalCreate:
 			c.Println("ERROR: can't create journal on server: small size.")
-			return
+			c.InitiateShutdown()
 		default:
 			c.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}
@@ -902,10 +911,13 @@ func (c *Client) Run() {
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
 	// Wait for interrupt signal
-	<-signalChan
+	select {
+	case <-c.TermChan:
+	case <-signalChan:
+	}
 
 	c.Println("Interrupt signal received. Shutting down...")
-	close(c.TermChan)
+	c.InitiateShutdown()
 
 	// Initiate graceful shutdown
 	c.CloseClientConn()

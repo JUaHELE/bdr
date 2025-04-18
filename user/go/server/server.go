@@ -23,8 +23,8 @@ import (
 
 // Connection and timing constants
 const (
-	PollInterval  = 100 // in milliseconds - polling frequency
-	RetryInterval = 1   // seconds - time to wait between retries
+	PollInterval           = 100 // in milliseconds - polling frequency
+	RetryInterval          = 1   // seconds - time to wait between retries
 	BenchmarkPrintInterval = 10
 )
 
@@ -70,7 +70,7 @@ type Server struct {
 	Stats       *benchmark.BenchmarkStats
 
 	stateMutex sync.Mutex
-	state State
+	state      State
 }
 
 func (s State) String() string {
@@ -115,6 +115,15 @@ func (s *Server) DebugPrintln(args ...interface{}) {
 	s.Config.DebugPrintln(args...)
 }
 
+func (s *Server) InitiateShutdown() {
+	select {
+	case <-s.TermChan:
+		// already closed
+	default:
+		close(s.TermChan)
+	}
+}
+
 // NewServer creates and initializes a new server instance
 func NewServer(cfg *Config) (*Server, error) {
 	// Open the target block device with read/write access
@@ -139,7 +148,7 @@ func NewServer(cfg *Config) (*Server, error) {
 		TermChan:    make(chan struct{}),
 		Connected:   false,
 		Stats:       benchmark.NewBenchmarkStats(cfg.Benchmark),
-		state: StateWriting,
+		state:       StateWriting,
 	}
 
 	return server, nil
@@ -472,7 +481,6 @@ func (s *Server) CheckValidSizes() error {
 	return nil
 }
 
-
 // handleCorrectPacket writes a correct block to the target device based on client information
 func (s *Server) HandleCorrectPackets(correctQueue chan *networking.Packet, wg *sync.WaitGroup) {
 	wg.Done()
@@ -483,7 +491,7 @@ func (s *Server) HandleCorrectPackets(correctQueue chan *networking.Packet, wg *
 		if !ok {
 			s.VerbosePrintln("invalid packet type for correctblock")
 		}
-		
+
 		// Write the correct data to disk
 		err := s.WriteCorrectBlockToReplica(&correctInfo)
 		if err != nil {
@@ -526,7 +534,7 @@ func (s *Server) HandleJournalBufferWrite(packet *networking.Packet) error {
 	if !ok {
 		return fmt.Errorf("Invalid payload type for WriteInfo")
 	}
- 
+
 	err := s.WriteBufferWriteToJournal(&writeInfo)
 	if err != nil {
 		return fmt.Errorf("Can't write buffer write to replica: %v", err)
@@ -540,8 +548,8 @@ func (s *Server) HandleJournalCorrectBlock(packet *networking.Packet) error {
 	if !ok {
 		return fmt.Errorf("invalid packet type for CorrectBlockInfo")
 	}
-	
-	err := s.WriteCorrectBlockToJournal(&correctInfo);
+
+	err := s.WriteCorrectBlockToJournal(&correctInfo)
 	if err != nil {
 		return fmt.Errorf("Can't write buffer write to replica: %v", err)
 	}
@@ -632,7 +640,6 @@ func (s *Server) WriteJournalToReplica() error {
 		if err != nil {
 			return fmt.Errorf("Can't read buffer write from journal:", err)
 		}
-
 
 		dataToWrite := bufferWrite.Data[:bufferWrite.Size]
 
@@ -917,7 +924,6 @@ func (s *Server) WriteBufferWriteToReplica(bufferWrite *networking.WriteInfo) er
 	return nil
 }
 
-
 func (s *Server) CopyJournalToReplica(jrn *journal.Journal) error {
 	for i := uint64(0); i < jrn.CorrectOffset; {
 		correctBlock, err := jrn.ReadCorrectBlock(i)
@@ -994,7 +1000,7 @@ func (s *Server) Run() {
 	<-signalChan
 
 	s.Println("Interrupt signal received. Shutting down...")
-	close(s.TermChan) // Signal termination to all goroutines
+	s.InitiateShutdown() // Signal termination to all goroutines
 
 	s.Listener.Close()
 	termWg.Wait()
