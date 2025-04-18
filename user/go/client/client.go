@@ -483,7 +483,7 @@ func (c *Client) CloseResources() {
 
 // InitiateCheckedReplication starts a full device verification
 func (c *Client) StartHashing() {
-	c.VerbosePrintln("Initiating full replication.")
+	c.VerbosePrintln("Initiating scan with journal...")
 	// Reset buffer since we'll perform full verification
 	c.ResetBufferIOCTL()
 
@@ -840,14 +840,47 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 			c.Println("It is advised to resize the journal or backup the replica.")
 
 			return
+		case networking.PacketTypeErrInit:
+			c.Println("ERROR: can't verify init info.")
+			return
+		case networking.PacketTypeErrInvalidSizes:
+			c.Println("ERROR: source disk and replica do not have the same size.")
+			return
+		case networking.PacketTypeErrJournalCreate:
+			c.Println("ERROR: can't create journal on server: small size.")
+			return
+		default:
+			c.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}
 	}
+}
+
+func (c *Client) FullReplicate() {
+	c.VerbosePrintln("Initiating full replication...")
+	// Reset buffer since we'll perform full verification
+	c.ResetBufferIOCTL()
+
+	// Pause the monitor to prevent interference during verification
+	c.MonitorPauseContr.Pause()
+
+	c.SetState(StateHashing)
+	// Request hashes from server to verify consistency
+	packet := networking.Packet{
+		PacketType: networking.PacketTypeCmdStartFullReplication,
+		Payload:    nil,
+	}
+
+	c.SendPacket(&packet)
 }
 
 // Run starts the client and handles graceful shutdown
 func (c *Client) Run() {
 	c.Println("Starting bdr client connected to", c.Config.IpAddress, "and port", c.Config.Port)
-	if c.Config.InitialReplication {
+	// TODO: divny
+
+	if c.Config.FullReplicate {
+		c.FullReplicate()
+	} else if c.Config.InitialReplication {
 		c.StartHashing()
 	}
 

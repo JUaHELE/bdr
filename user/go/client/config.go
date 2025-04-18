@@ -19,6 +19,7 @@ const (
 	DefaultNoPrint            = false
 	DefaultInitialReplication = false
 	DefaultBenchmark = false
+	DefaultFullReplicate = false
 )
 
 // Config holds data passed by arguments
@@ -31,6 +32,7 @@ type Config struct {
 	Debug              bool   // includes debug prints to verbose
 	NoPrint            bool   // to prints except error messages
 	InitialReplication bool   // compares disks if they are the same by doing checksums of blocks
+	FullReplicate bool
 	Benchmark bool
 }
 
@@ -102,6 +104,7 @@ func NewConfig() *Config {
 	flag.BoolVar(&cfg.NoPrint, "noprint", DefaultNoPrint, "Disables prints")
 	flag.BoolVar(&cfg.InitialReplication, "noreplication", DefaultInitialReplication, "Disables replication when started")
 	flag.BoolVar(&cfg.Benchmark, "benchmark", DefaultBenchmark, "Enables benchmark info")
+	flag.BoolVar(&cfg.FullReplicate, "fullscan", DefaultFullReplicate, "Performs full replication at the start of the deamon")
 	flag.Parse()
 
 	cfg.InitialReplication = !cfg.InitialReplication

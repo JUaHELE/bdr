@@ -169,8 +169,12 @@ func CreateInfoPacket(packetType uint32) *networking.Packet {
 func (s *Server) HashDisk(termChan chan struct{}, hashedSpace uint64, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	s.VerbosePrintln("Reseting journal...")
-	s.Journal.ResetTo(s.Journal.WriteOffset, s.Journal.CorrectOffset)
+	state := s.GetState()
+
+	if state != StateDestroyingReplica {
+		s.VerbosePrintln("Reseting journal...")
+		s.Journal.ResetTo(s.Journal.WriteOffset, s.Journal.CorrectOffset)
+	}
 
 	s.VerbosePrintln("Hashing disk...")
 
@@ -584,6 +588,12 @@ func (s *Server) HandleJournalPackets(journalQueue chan *networking.Packet, wg *
 }
 
 func (s *Server) HandleJournalWriting() {
+	state := s.GetState()
+
+	if state == StateDestroyingReplica {
+		return
+	}
+
 	err := s.WriteJournalToReplica()
 	if err != nil {
 		s.VerbosePrintln("Can't write journal to replica:", err)
@@ -791,6 +801,16 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			s.VerbosePrintln("Hashing completed.")
 			s.HandleJournalWriting()
 			s.SetState(StateWriting)
+		case networking.PacketTypeCmdStartFullReplication:
+			s.VerbosePrintln("Starting full replication.")
+			s.SetState(StateDestroyingReplica)
+
+			close(hashTermChan)
+			hashWg.Wait()
+
+			hashTermChan = make(chan struct{})
+			hashWg.Add(1)
+			go s.HashDisk(hashTermChan, networking.HashedSpaceBase, &hashWg)
 		default:
 			s.VerbosePrintln("Unknown packet received:", packet.PacketType)
 		}

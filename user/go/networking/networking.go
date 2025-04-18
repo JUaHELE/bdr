@@ -15,6 +15,7 @@ const (
 
 const (
 	PacketTypeCmdStartHashing = iota
+	PacketTypeCmdStartFullReplication
 	PacketTypeInfoHashingCompleted
 	PacketTypeInfoStartHashing
 	PacketTypeInfoInit
