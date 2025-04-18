@@ -83,6 +83,15 @@ func (s State) String() string {
 	}[s]
 }
 
+func WaitUntilChannelEmpty(ch chan *networking.Packet) {
+    for {
+        if len(ch) == 0 {
+            return
+        }
+        time.Sleep(10 * time.Millisecond)
+    }
+}
+
 func (s *Server) GetState() State {
 	s.stateMutex.Lock()
 	defer s.stateMutex.Unlock()
@@ -558,7 +567,7 @@ func (s *Server) HandleJournalCorrectBlock(packet *networking.Packet) error {
 }
 
 func (s *Server) HandleJournalPackets(journalQueue chan *networking.Packet, wg *sync.WaitGroup) {
-	wg.Done()
+	defer wg.Done()
 
 	for packet := range journalQueue {
 		state := s.GetState()
@@ -745,11 +754,11 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	childWg.Add(1)
 	go s.HandleWritePackets(writeQueue, &childWg)
 
-	journalQueue := make(chan *networking.Packet, JournalPacketQueueSize)
-	defer close(journalQueue)
+	var journalWg sync.WaitGroup
+	defer journalWg.Wait()
 
-	childWg.Add(1)
-	go s.HandleJournalPackets(journalQueue, &childWg)
+	journalQueue := make(chan *networking.Packet, JournalPacketQueueSize)
+
 
 	correctQueue := make(chan *networking.Packet, CorrectPacketQueueSize)
 	defer close(correctQueue)
@@ -761,6 +770,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		if s.CheckTermination() {
 			s.VerbosePrintln("Terminating client handler.")
 			close(hashTermChan)
+			close(journalQueue)
 			return
 		}
 
@@ -769,6 +779,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		if err := s.Decoder.Decode(packet); err != nil {
 			if utils.IsConnectionClosed(err) {
 				close(hashTermChan)
+				close(journalQueue)
 				return
 			}
 			s.DebugPrintln("Failed to decode packet:", err)
@@ -782,6 +793,13 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 
 			s.SetState(StateHashing)
 
+			close(journalQueue)
+			journalWg.Wait()
+
+			journalQueue = make(chan *networking.Packet, JournalPacketQueueSize)
+			journalWg.Add(1)
+			go s.HandleJournalPackets(journalQueue, &journalWg)
+			
 			close(hashTermChan)
 			hashWg.Wait()
 
@@ -806,6 +824,11 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			}
 		case networking.PacketTypeInfoHashingCompleted:
 			s.VerbosePrintln("Hashing completed.")
+
+			close(journalQueue)
+			journalWg.Wait()
+			journalQueue = make(chan *networking.Packet, JournalPacketQueueSize)
+
 			s.HandleJournalWriting()
 			s.SetState(StateWriting)
 		case networking.PacketTypeCmdStartFullReplication:
