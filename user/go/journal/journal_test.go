@@ -62,8 +62,8 @@ func NewJournalForTest(diskPath string, sectionBufWritesSize uint64, bufWriteByt
 	journal := &Journal{
 		disk:     disk,
 		diskSize: diskSize,
-		writeOffset: 0,
-		correctOffset: 0,
+		WriteOffset: 0,
+		CorrectOffset: 0,
 		header:   header,
 	}
 
@@ -112,8 +112,8 @@ func OpenJournalForTest(diskPath string) (*Journal, error) {
 		return nil, err
 	}
 
-	jrn.writeOffset = firstWrite
-	jrn.correctOffset = firstBuffer
+	jrn.WriteOffset = firstWrite
+	jrn.CorrectOffset = firstBuffer
 
 	return jrn, nil
 }

@@ -11,6 +11,7 @@ func TestValidateArgs(t *testing.T) {
 		targetDevicePath string
 		port             int
 		ipAddress        string
+		journalPath string
 		wantErr          bool
 		errorContains    string
 	}{
@@ -19,6 +20,7 @@ func TestValidateArgs(t *testing.T) {
 			targetDevicePath: "/dev/sda",
 			ipAddress:        "192.168.1.1",
 			port:             8080,
+			journalPath: "/dev/sda",
 			wantErr:          false,
 		},
 		{
@@ -26,6 +28,7 @@ func TestValidateArgs(t *testing.T) {
 			targetDevicePath: DefaultTargetDevicePath,
 			ipAddress:        "192.168.1.1",
 			port:             8080,
+			journalPath: "/dev/sda",
 			wantErr:          true,
 			errorContains:    "target device path",
 		},
@@ -34,6 +37,7 @@ func TestValidateArgs(t *testing.T) {
 			targetDevicePath: "/dev/sda",
 			ipAddress:        "192.168.1.1",
 			port:             DefaultPort,
+			journalPath: "/dev/sda",
 			wantErr:          true,
 			errorContains:    "port",
 		},
@@ -42,6 +46,7 @@ func TestValidateArgs(t *testing.T) {
 			targetDevicePath: "/dev/sda",
 			ipAddress:        DefaultIpAddress,
 			port:             8080,
+			journalPath: "/dev/sda",
 			wantErr:          true,
 			errorContains:    "IP address",
 		},
@@ -50,6 +55,7 @@ func TestValidateArgs(t *testing.T) {
 			targetDevicePath: DefaultTargetDevicePath,
 			ipAddress:        DefaultIpAddress,
 			port:             DefaultPort,
+			journalPath: "/dev/sda",
 			wantErr:          true,
 			errorContains:    "missing required arguments",
 		},
@@ -58,6 +64,7 @@ func TestValidateArgs(t *testing.T) {
 			targetDevicePath: "",
 			ipAddress:        "",
 			port:             0,
+			journalPath: "/dev/sda",
 			wantErr:          true,
 			errorContains:    "missing required arguments",
 		},
@@ -68,8 +75,9 @@ func TestValidateArgs(t *testing.T) {
 			targetPath := tt.targetDevicePath
 			port := tt.port
 			ip := tt.ipAddress
+			journalPath := tt.journalPath
 
-			err := ValidateArgs(&targetPath, &port, &ip)
+			err := ValidateArgs(&targetPath, &port, &ip, &journalPath)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateArgs() error = %v, wantErr %v", err, tt.wantErr)

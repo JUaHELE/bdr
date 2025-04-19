@@ -106,7 +106,7 @@ func (s *Server) SetState(newState State) {
 	oldState := s.state
 	s.state = newState
 
-	s.VerbosePrintln("Server transitioned from", oldState, "to", newState, "\n")
+	s.VerbosePrintln("Server transitioned from", oldState, "to", newState)
 }
 
 // Println logs a message with standard priority
@@ -513,6 +513,11 @@ func (s *Server) HandleWritePackets(writeQueue chan *networking.Packet, wg *sync
 	wg.Done()
 
 	for packet := range writeQueue {
+		state := s.GetState()
+		if state != StateWriting {
+			continue
+		}
+
 		s.DebugPrintln("Write information packet received.")
 
 		// Extract write information from the packet
@@ -631,12 +636,12 @@ func (s *Server) WriteJournalToReplica() error {
 	for i := uint64(0); i < s.Journal.CorrectOffset; {
 		correctBlock, err := s.Journal.ReadCorrectBlock(i)
 		if err != nil {
-			return fmt.Errorf("Can't read correct block from journal:", err)
+			return fmt.Errorf("Can't read correct block from journal: %v", err)
 		}
 
 		// Write the correct data to disk
 		if _, err := s.TargetDevFd.WriteAt(correctBlock.Data, int64(correctBlock.Offset)); err != nil {
-			return fmt.Errorf("Can't write correct block:", err)
+			return fmt.Errorf("Can't write correct block: %v", err)
 		}
 
 		i++
@@ -647,14 +652,14 @@ func (s *Server) WriteJournalToReplica() error {
 	for i := uint64(0); i < s.Journal.WriteOffset; {
 		bufferWrite, err := s.Journal.ReadBufferWrite(i)
 		if err != nil {
-			return fmt.Errorf("Can't read buffer write from journal:", err)
+			return fmt.Errorf("Can't read buffer write from journal: %v", err)
 		}
 
 		dataToWrite := bufferWrite.Data[:bufferWrite.Size]
 
 		// Write data to the target device
 		if _, err := s.TargetDevFd.WriteAt(dataToWrite, int64(bufferWrite.Offset)); err != nil {
-			return fmt.Errorf("Can't write buffer write:", err)
+			return fmt.Errorf("Can't write buffer write: %v", err)
 		}
 
 		s.TargetDevFd.Sync()
@@ -664,7 +669,7 @@ func (s *Server) WriteJournalToReplica() error {
 
 	err := s.Journal.Invalidate()
 	if err != nil {
-		return fmt.Errorf("Can't invalidate the journal:", err)
+		return fmt.Errorf("Can't invalidate the journal: %v", err)
 	}
 
 	s.VerbosePrintln("Journal sucessfully written to replica.")
@@ -758,7 +763,6 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	defer journalWg.Wait()
 
 	journalQueue := make(chan *networking.Packet, JournalPacketQueueSize)
-
 
 	correctQueue := make(chan *networking.Packet, CorrectPacketQueueSize)
 	defer close(correctQueue)

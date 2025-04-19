@@ -97,7 +97,7 @@ func (c *Client) SetState(newState State) {
 	oldState := c.state
 	c.state = newState
 
-	c.VerbosePrintln("Client transitioned from", oldState, "to", newState, "\n")
+	c.VerbosePrintln("Client transitioned from", oldState, "to", newState)
 }
 
 func (c *Client) InitiateShutdown() {
@@ -512,8 +512,6 @@ func (c *Client) StartHashing() {
 // ProcessBufferInfo processes write operations stored in the buffer
 func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 	// Process each write operation in the buffer
-	bufferInfo.Print()
-
 	for i := uint64(0); i < bufferInfo.Length; i++ {
 		// Skip if monitor is paused (during hash verification)
 		if c.MonitorPauseContr.IsPaused() {
