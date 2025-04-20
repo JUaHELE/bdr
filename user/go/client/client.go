@@ -304,6 +304,7 @@ func (c *Client) reconnectToServer() {
 		}
 
 		c.VerbosePrintln("Attempt for reconnection failed. Trying again...")
+		RetrySleep()
 	}
 }
 

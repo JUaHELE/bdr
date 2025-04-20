@@ -1029,9 +1029,8 @@ func (s *Server) Run() {
 	s.Println("Interrupt signal received. Shutting down...")
 	s.InitiateShutdown() // Signal termination to all goroutines
 
-	s.Listener.Close()
-	termWg.Wait()
 	s.Close()
+	termWg.Wait()
 
 	s.Println("bdr server terminated successfully.")
 }
