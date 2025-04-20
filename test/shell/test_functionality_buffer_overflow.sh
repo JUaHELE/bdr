@@ -26,6 +26,7 @@ BUFFER_SIZE_IN_WRITES=1024
 TARGET_NAME="bdr"
 
 LOOPDEV_ID=44
+LOOPDEV_JOURNAL_ID=66
 
 CLIENT_PID=""
 SERVER_PID=""
@@ -75,12 +76,13 @@ create_targets 1 $TARGET_SIZE $TARGET_NAME $BUFFER_SIZE_IN_WRITES
 MAPPER_PATH="/dev/mapper/bdr-1"
 create_loop_device $LOOPDEV_ID $TARGET_SIZE
 
-if [[ ${#LOOP_DEVICES[@]} -ne 2 ]]; then
-    error_exit "There should be only 2 loop devices, found ${#LOOP_DEVICES[@]}."
+create_loop_device $LOOPDEV_JOURNAL_ID $TARGET_SIZE
+if [[ ${#LOOP_DEVICES[@]} -ne 3 ]]; then
+    error_exit "There should be exactly 3 loop devices, found ${#LOOP_DEVICES[@]}."
 fi
 
-CLIENT_ARGS="-chardev /dev/bdr-1 -mapperdev /dev/mapper/bdr-1 -address 127.0.0.1 -port 9832 -noprint"
-SERVER_ARGS="-target ${LOOP_DEVICES[$LOOPDEV_ID]} -port 9832 -address 127.0.0.1 -noprint"
+CLIENT_ARGS="-chardev /dev/bdr-1 -mapperdev /dev/mapper/bdr-1 -address 127.0.0.1 -port 9832 -noprint -fullscan"
+SERVER_ARGS="-target ${LOOP_DEVICES[$LOOPDEV_ID]} -port 9832 -address 127.0.0.1 -noprint -journal ${LOOP_DEVICES[$LOOPDEV_JOURNAL_ID]}"
 
 compile_and_start_daemons() {
     log_info "Compiling and starting daemons..."
@@ -103,20 +105,15 @@ compile_and_start_daemons() {
     popd > /dev/null
 }
 
+log_info "Writing test data to $MAPPER_PATH (source device)..."
+dd if=/dev/urandom of=$MAPPER_PATH bs=4096 count=2000 conv=fsync &> /dev/null
+
 compile_and_start_daemons
 
 log_info "Testing replication..."
 
-log_info "Writing test data to $MAPPER_PATH (source device)..."
-dd if=/dev/urandom of=$MAPPER_PATH bs=4096 count=2000 conv=fsync &> /dev/null
-# sleep to ensure full sync
-sleep 2
-
-dd if=/dev/urandom of=$MAPPER_PATH bs=4096 count=20 conv=fsync &>/dev/null
-sleep 1
-
 if cmp "$MAPPER_PATH" "${LOOP_DEVICES[$LOOPDEV_ID]}"; then
     log_info "TEST PASSED"
 else
-    log_info "TEST FAILED"
+    error_exit "TEST FAILED"
 fi

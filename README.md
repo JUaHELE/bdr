@@ -1,7 +1,7 @@
 # BDR: Block Device Replicator
 
 ## Introduction
-BDR (Block Device Replicator) is a real-time, network-based block device replication solution designed for Linux. BDR observes writes made to a specified device and sends them over the network to a designated destination, where the receiver daemon writes them to a backup device—essentially mirroring RAID 1 functionality.
+BDR (Block Device Replicator) is a real-time, network-based block device replication solution designed for Linux. BDR observes writes made to a specified device and sends them over the network to a designated destination, where the receiver daemon writes them to a backup device, essentially mirroring RAID 1 functionality.
 
 If the disk experiences high load and the client daemon cannot send new writes quickly enough, a complete disk scan is necessary. When the client daemon starts, it performs a full disk scan to ensure consistency. The initial scan can be turned off if you are sure that devices are identical (not advised).
 
@@ -54,7 +54,7 @@ After successfull target setup you should see a character device at `/dev/$chara
 
 You should now only communicate with the underlying device through the the mapper path, not the original `$underlying_device_path`
 
-The buffer is a shared structure between the kernel and userspace daemon, where the kernel places write information. One write structure is 4104 bytes long. It's up to you how large will you setup the buffer, but it's advised to set it to at least 1% of the capacity of the disk to prevent complete scans as much as possible.
+The buffer is a shared structure between the kernel and userspace daemon, where the kernel places write information. One write structure is 4104 bytes long. The size of the buffer depends on load of the dis k and the speed of the internet connection.
 
 ```bash
 sudo ./setup.sh
@@ -69,6 +69,8 @@ The `setup.sh` script has to run with root privileges, because of dmsetup
 ```
   -address string
     	Receiver IP address (required)
+  -fullscan
+    	Initiates full scan after start of the daemon
   -chardev string
     	Path to BDR character device (required)
   -debug
@@ -104,6 +106,8 @@ Client has to run with root privileges since it has to open character device and
     	Path to target device (required)
   -verbose
     	Provides verbose output of the program
+  -journal string
+    	Path to disk, where journal will be saved (required)
 ```
 
 Server has to also run with root privileges because it has to open the target device specified by `-target` to propagate reads.
@@ -123,10 +127,10 @@ rmmod bdr
 ```
 
 ## Configure Your Tunneling Solution (Recommended)
-For secure and efficient replication over a network, it is recommended to use an encrypted tunneling solution such as SSH tunneling, WireGuard, or VPN. Ensure low-latency connectivity for optimal performance.
+For secure replication over a network, it is recommended to use an encrypted tunneling solution such as SSH tunneling, WireGuard, or VPN. Ensure low-latency connectivity for optimal performance.
 
 ## Testing
 
-The `test/` directory contains test scripts to verify correct functionality. Due to the nature of these tests, they must be executed with root privileges to set up test loop devices and load the kernel module.
+The `test/shell/` directory contains test scripts to verify correct functionality. Due to the nature of these tests, they must be executed with root privileges to set up test loop devices and load the kernel module.
 
 `run_tests.sh` script is available for executing all the tests

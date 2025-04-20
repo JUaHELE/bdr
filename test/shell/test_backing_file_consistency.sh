@@ -33,7 +33,7 @@ cleanup() {
     rm -rf "$TMP_DIR"
 
     log_info "Removing device-mapper target..."
-    sudo rmmod bdr 2>&1 > /dev/null || true
+    sudo rmmod bdr  &> /dev/null || true
 
     log_info "Resources cleaned up."
 }

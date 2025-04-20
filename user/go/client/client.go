@@ -847,6 +847,7 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 			c.Println("It is advised to resize the journal or backup the replica.")
 
 			c.InitiateShutdown()
+			return
 		case networking.PacketTypeErrInit:
 			c.Println("ERROR: can't verify init info.")
 			c.InitiateShutdown()

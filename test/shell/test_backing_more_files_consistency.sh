@@ -32,7 +32,7 @@ cleanup() {
     cleanup_targets $TARGET_NAME
 
     log_info "Removing device-mapper target..."
-    sudo rmmod bdr 2>&1 > /dev/null || true
+    sudo rmmod bdr &> /dev/null || true
 
     rm -rf "$TMP_DIR"
 
