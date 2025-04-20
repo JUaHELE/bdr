@@ -15,10 +15,12 @@ const (
 
 const (
 	PacketTypeCmdStartHashing = iota
-	PacketTypeCmdStartFullReplication
+	PacketTypeCmdStartFullScan
 	PacketTypeInfoHashingCompleted
 	PacketTypeInfoStartHashing
 	PacketTypeInfoInit
+	PacketTypeInfoReplicationCompleted
+	PacketTypeInfoStartReplication
 	PacketTypeErrInit
 	PacketTypeErrInvalidSizes
 	PacketTypeErrHash
@@ -27,7 +29,14 @@ const (
 	PacketTypePayloadBufferWrite
 	PacketTypePayloadHash
 	PacketTypePayloadCorrectBlock
+	PacketTypePayloadReplicationBlock
 )
+
+type ReplicationBlockInfo struct {
+	Offset uint64
+	Size uint32
+	Data []byte
+}
 
 type CorrectBlockInfo struct {
 	Offset uint64

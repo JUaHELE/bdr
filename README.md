@@ -70,11 +70,9 @@ The `setup.sh` script has to run with root privileges, because of dmsetup
   -address string
     	Receiver IP address (required)
   -fullscan
-    	Initiates full scan after start of the daemon
+    	Initiates direct full scan after start of the daemon
   -chardev string
     	Path to BDR character device (required)
-  -debug
-    	Provides debug output of the program
   -noprint
     	Disables prints
   -noreplication
@@ -96,8 +94,6 @@ Client has to run with root privileges since it has to open character device and
 ```
   -address string
     	IP address to listen on (required)
-  -debug
-    	Provides debug output of the program
   -noprint
     	Disables prints
   -port int

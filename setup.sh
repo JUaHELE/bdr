@@ -49,7 +49,7 @@ convert_to_writes() {
 
 read -p "Enter how you want to name your mapper (name of the device in /dev/mapper): " target_name
 read -p "Enter replicated device (e.g., /dev/loop0, /dev/sdb2): " device
-read -p "Enter character device name (any, but advised similar to mapper name): " chardev_name
+read -p "Enter character device name (any, can be similar to mapper name): " chardev_name
 
 # Ask for buffer size with unit and convert to writes
 read -p "Enter buffer size (e.g., 4104, 8K, 1M): " buffer_size_input

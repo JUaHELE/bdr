@@ -56,6 +56,7 @@ type State int
 const (
 	StateHashing State = iota
 	StateWriting
+	StateReplicating
 )
 
 // Client represents a BDR client instance
@@ -80,6 +81,7 @@ func (s State) String() string {
 	return [...]string{
 		"Hashing",
 		"Writing",
+		"Replicating",
 	}[s]
 }
 
@@ -193,7 +195,7 @@ func (c *Client) SendPacket(packet *networking.Packet) {
 		err := c.Encoder.Encode(packet)
 		if err != nil {
 			if terminated := c.CheckTermination(); terminated {
-				c.VerbosePrintln("Terminating attepmt for successfull packet send...")
+				c.VerbosePrintln("Terminating attepmt for packet send...")
 				return
 			}
 
@@ -297,6 +299,8 @@ func (c *Client) reconnectToServer() {
 			state := c.GetState()
 			if state == StateHashing {
 				c.StartHashing()
+			} else if state == StateReplicating {
+				
 			}
 
 			c.Println("Successfully reconnected to server")
@@ -580,57 +584,6 @@ func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
 	}
 }
 
-func (c *Client) SpawnRepairWrokers(blockChan chan uint64, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	numWorkers := runtime.NumCPU()
-
-	type sendItem struct {
-		offset uint64
-		buffer []byte
-	}
-	sendChan := make(chan sendItem)
-
-	go func() {
-		defer close(sendChan)
-
-		var wg sync.WaitGroup
-		for i := 0; i < numWorkers; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-
-				for blockOff := range blockChan {
-					fileOff := (blockOff) * networking.RepairBlockSize
-					buf := make([]byte, networking.RepairBlockSize)
-					if _, err := c.UnderDevFile.ReadAt(buf, int64(fileOff)); err != nil && err != io.EOF {
-						c.VerbosePrintln("Error while reading the disk...")
-					}
-
-					sendChan <- sendItem{
-						offset: fileOff,
-						buffer: buf,
-					}
-				}
-			}()
-		}
-		wg.Wait()
-	}()
-
-	var sendWg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		sendWg.Add(1)
-		go func() {
-			defer sendWg.Done()
-
-			for send := range sendChan {
-				c.SendCorrectBlock(send.buffer, send.offset, networking.RepairBlockSize)
-			}
-		}()
-	}
-	sendWg.Wait()
-}
-
 // MonitorChanges continuously monitors for changes to replicate
 func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 	defer wg.Done()
@@ -666,6 +619,109 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 		// Process the write operations in the buffer
 		c.ProcessBufferInfo(&bufferInfo)
 	}
+}
+
+func (c *Client) InitReplication(replicationWg *sync.WaitGroup) {
+	defer replicationWg.Done()
+	numWorkers := runtime.NumCPU()
+	blockSize := networking.HashedSpaceBase
+
+	s.SetState(StateReplicating)
+	
+	type readItem struct {
+		offset uint64
+		size   uint32
+	}
+	
+	type sendItem struct {
+		buffer []byte
+		offset uint64
+		size   uint32
+	}
+	
+	readChan := make(chan readItem, numWorkers)
+	sendChan := make(chan sendItem, numWorkers)
+	
+	diskSize, err := utils.GetDeviceSize(c.Config.UnderDevicePath)
+	if err != nil {
+		c.VerbosePrintln("Can't initiate replication:", err)
+	}
+
+	// First stage: Generate read tasks
+	go func() {
+		defer close(readChan)
+		for offset := uint64(0); offset < diskSize; offset += uint64(blockSize) {
+			size := uint32(blockSize)
+			// Handle the last block which might be smaller
+			if offset+uint64(size) > diskSize {
+				size = uint32(diskSize - offset)
+			}
+			readChan <- readItem{
+				offset: offset,
+				size:   size,
+			}
+		}
+	}()
+	
+	// Second stage: Read blocks from disk
+	var readWg sync.WaitGroup
+	readWg.Add(numWorkers)
+	go func() {
+		defer close(sendChan)
+		for i := 0; i < numWorkers; i++ {
+			go func() {
+				defer readWg.Done()
+				for item := range readChan {
+					buf := make([]byte, item.size)
+					if _, err := c.UnderDevFile.ReadAt(buf, int64(item.offset)); err != nil && err != io.EOF {
+						c.VerbosePrintln("Error while reading the disk:", err)
+						continue
+					}
+					sendChan <- sendItem{
+						buffer: buf,
+						offset: item.offset,
+						size:   item.size,
+					}
+				}
+			}()
+		}
+		readWg.Wait()
+	}()
+	
+	// Third stage: Send blocks through network
+	var sendWg sync.WaitGroup
+	sendWg.Add(numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		go func() {
+			defer sendWg.Done()
+			for item := range sendChan {
+				// Send the block data through the network
+				c.SendReplicationBlock(item.buffer, item.offset, item.size)
+				
+				c.DebugPrintln("Block sent successfully, offset:", item.offset, "size:", item.size)
+			}
+		}()
+	}
+	
+	sendWg.Wait()
+	
+	packet := CreateInfoPacket(networking.PacketTypeInfoReplicationCompleted)
+	c.SendPacket(packet)
+}
+
+func (c *Client) SendReplicationBlock(data []byte, offset uint64, size uint32) {
+	replicationInfo := networking.ReplicationBlockInfo{
+		Offset: offset,
+		Size:   size,
+		Data:   data,
+	}
+	
+	packet := &networking.Packet{
+		PacketType:    networking.PacketTypePayloadReplicationBlock,
+		Payload: replicationInfo,
+	}
+	
+	c.SendPacket(packet)
 }
 
 func (c *Client) InitHashing(hashChan chan *networking.Packet, hashWg *sync.WaitGroup) {
@@ -864,8 +920,8 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 	}
 }
 
-func (c *Client) FullReplicate() {
-	c.VerbosePrintln("Initiating full replication...")
+func (c *Client) FullScan() {
+	c.VerbosePrintln("Initiating full scan...")
 	// Reset buffer since we'll perform full verification
 	c.ResetBufferIOCTL()
 
@@ -875,7 +931,26 @@ func (c *Client) FullReplicate() {
 	c.SetState(StateHashing)
 	// Request hashes from server to verify consistency
 	packet := networking.Packet{
-		PacketType: networking.PacketTypeCmdStartFullReplication,
+		PacketType: networking.PacketTypeCmdStartFullScan,
+		Payload:    nil,
+	}
+
+	c.SendPacket(&packet)
+}
+
+
+func (c *Client) FullReplicate() {
+	c.VerbosePrintln("Initiating full replication...")
+	// Reset buffer since we'll perform full verification
+	c.ResetBufferIOCTL()
+
+	// Pause the monitor to prevent interference during verification
+	c.MonitorPauseContr.Pause()
+
+	c.SetState(StateReplicating)
+	// Request hashes from server to verify consistency
+	packet := networking.Packet{
+		PacketType: networking.PacketTypeInfoStartReplication,
 		Payload:    nil,
 	}
 
@@ -885,10 +960,9 @@ func (c *Client) FullReplicate() {
 // Run starts the client and handles graceful shutdown
 func (c *Client) Run() {
 	c.Println("Starting bdr client connected to", c.Config.IpAddress, "and port", c.Config.Port)
-	// TODO: divny
 
 	if c.Config.FullReplicate {
-		c.FullReplicate()
+		c.FullScan()
 	} else if c.Config.InitialReplication {
 		c.StartHashing()
 	}

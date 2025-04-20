@@ -37,6 +37,7 @@ const (
 	WritePacketQueueSize   = 8 // number of writes that fit in the incoming queue; others wait
 	CorrectPacketQueueSize = 8 // numbers are chosen not to overwhelm the disk
 	JournalPacketQueueSize = 8
+	ReplicationPacketQueueSize = 8
 )
 
 type State int
@@ -47,6 +48,7 @@ const (
 	StateDisconnected
 	StateDestroyingReplica
 	StateJournalOverflow
+	StateReplicating
 )
 
 // RetrySleep pauses execution for RetryInterval seconds
@@ -80,6 +82,7 @@ func (s State) String() string {
 		"Disconnected",
 		"DestroyingReplica",
 		"JournalOverflow",
+		"Replicating",
 	}[s]
 }
 
@@ -702,6 +705,44 @@ func (s *Server) CreateJournal() error {
 	return err
 }
 
+func (s *Server) HandleReplicationPackets(replicationChan chan *networking.Packet, replicationWg *sync.WaitGroup) {
+	defer replicationWg.Done()
+	numWorkers := runtime.NumCPU()
+	
+	var workerWg sync.WaitGroup
+	workerWg.Add(numWorkers)
+	
+	for i := 0; i < numWorkers; i++ {
+		go func() {
+			defer workerWg.Done()
+			for packet := range replicationChan {
+				replicationInfo, ok := packet.Payload.(networking.ReplicationInfo)
+				if !ok {
+					s.VerbosePrintln("Invalid payload type for ReplicationInfo")
+					continue
+				}
+				
+				// Write the data to disk
+				if _, err := s.TargetDevFile.WriteAt(replicationInfo.Data, int64(replicationInfo.Offset)); err != nil {
+					s.VerbosePrintln("Error writing data to disk:", err)
+					continue
+				}
+				
+				s.DebugPrintln("Block received and written successfully, offset:", replicationInfo.Offset, "size:", replicationInfo.Size)
+			}
+		}()
+	}
+	
+	workerWg.Wait()
+	
+	// Final sync to ensure all data is written to disk
+	if err := s.TargetDevFile.Sync(); err != nil {
+		s.VerbosePrintln("Error during final sync:", err)
+	}
+	
+	s.VerbosePrintln("Replication completed: received and wrote", totalBytesReceived, "bytes in", elapsed, "seconds")
+}
+
 // HandleClient manages a connected client session
 func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	defer wg.Done()
@@ -767,6 +808,11 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	correctQueue := make(chan *networking.Packet, CorrectPacketQueueSize)
 	defer close(correctQueue)
 
+	var replicationWg sync.WaitGroup
+	defer replicationWg.Wait()
+
+	replicationQueue := make(chan *networking.Packet, ReplicationPacketQueueSize)
+
 	childWg.Add(1)
 	go s.HandleCorrectPackets(correctQueue, &childWg)
 
@@ -775,6 +821,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			s.VerbosePrintln("Terminating client handler.")
 			close(hashTermChan)
 			close(journalQueue)
+			close(replicationQueue)
 			return
 		}
 
@@ -784,6 +831,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			if utils.IsConnectionClosed(err) {
 				close(hashTermChan)
 				close(journalQueue)
+				close(replicationQueue)
 				return
 			}
 			s.DebugPrintln("Failed to decode packet:", err)
@@ -826,6 +874,10 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			} else if state == StateDestroyingReplica {
 				correctQueue <- packet
 			}
+		case networking.PacketTypePayloadReplicationBlock:
+			state := s.GetState()
+	
+			replicationQueue <- packet
 		case networking.PacketTypeInfoHashingCompleted:
 			s.VerbosePrintln("Hashing completed.")
 
@@ -835,6 +887,22 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 
 			s.HandleJournalWriting()
 			s.SetState(StateWriting)
+		case networking.PacketTypeInfoReplicationCompleted:
+			s.VerbosePrintln("Replication completed.")
+			s.SetState(StateWriting)
+
+			close(replicationQueue)
+			replicationWg.Wait()
+			s.SetState(StateWriting)
+			
+		case networking.PacketTypeInfoStartReplication:
+			s.VerbosePrintln("Starting replication.")
+			s.SetState(StateReplicating)
+			
+			replicationWg.Add(1)
+			go s.HandleReplicationPackets(replicationQueue, replicationWg)
+			
+			replicationQueue = make(chan *networking.Packet, ReplicationPacketQueueSize)
 		case networking.PacketTypeCmdStartFullReplication:
 			s.VerbosePrintln("Starting full replication.")
 			s.SetState(StateDestroyingReplica)
