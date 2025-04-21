@@ -13,6 +13,7 @@
    - [Setting Up the Device Target](#setting-up-the-device-target)
    - [Configuration Options](#configuration-options)
    - [Buffer Size Considerations](#buffer-size-considerations)
+   - [Different Types of Recoveries](#different-types-of-Recoveries)
 5. [Usage](#usage)
    - [Client Configuration](#client-configuration)
    - [Server Configuration](#server-configuration)
@@ -147,7 +148,35 @@ For typical usage:
 - **Medium-traffic disk**: 5000-20000 writes buffer (20-80 MB)
 - **High-traffic disk**: 20000-100000 writes buffer (80-400 MB)
 
-If the buffer fills up due to network congestion or high write rates, BDR will need to perform a full disk scan to ensure consistency once the network connection is restored.
+If the buffer fills up due to network congestion or high write rates, BDR will need to perform a scan to ensure consistency once the network connection is restored.
+
+### Different Types of Recoveries
+
+BDR provides several types of recovery mechanisms to maintain data consistency:
+
+#### Journal Scan
+
+This scan is initiated every time at the start of the client deamon unless specified `-noreplication` flag or when the buffer overflows. When this happens, some writes are lost to BDR and need to be recovered through scanning. The process works as follows:
+
+1. The BDR server separates disk space into blocks and computes checksums
+2. These checksums are sent to the client
+3. The client compares them with the source disk checksums
+4. If a block checksum mismatches between source and replica, the correct block is transmitted to the server
+5. The correct block is written to the journal
+6. After all correct blocks are transmitted, the buffer is sent and saved in the journal
+7. Finally, the journal is written to disk
+
+This approach ensures that the replica will stay in a prefix consistent state at all times, even during recovery operations.
+
+#### After-Start Recoveries
+
+When starting the BDR client daemon, you can choose between different recovery mechanisms:
+
+1. **Full Scan**: Initiated when the client daemon is started with the `-fullscan` flag. This scan writes the correct blocks directly to the replica without using the journal. This method is intended for cases when journal space isn't sufficient to accommodate all correct blocks.
+
+2. **Full Replication**: Initiated when the client daemon is started with the `-fullreplication` flag. The BDR client daemon reads the entire disk and transmits it to the server. This feature is particularly useful when initializing a replica for the first time, as checksums will differ on every block.
+
+**Note**: These approaches might temporarily corrupt the replica, so use with caution.
 
 ## Usage
 
@@ -180,6 +209,10 @@ sudo bdr_client -chardev /dev/$character_device_name -mapperdev /dev/mapper/$map
     	Path to underlying device, used only for reading (required)
   -verbose
     	Provides verbose output of the program
+  -debug
+    	Provides debug output of the program
+  -fullreplication
+    	Transmits the entire disk at the start of the deamon
 ```
 
 **Example with full disk scan**:
