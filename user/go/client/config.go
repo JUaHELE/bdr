@@ -13,12 +13,12 @@ const (
 	DefaultUnderDevicePath    = "required"
 	DefaultIpAddress          = "required"
 	DefaultPort               = 0
-	DefaultFullScan           = false
 	DefaultVerbose            = false
 	DefaultDebug              = false
 	DefaultNoPrint            = false
 	DefaultInitialReplication = false
 	DefaultBenchmark = false
+	DefaultFullScan = false
 	DefaultFullReplicate = false
 )
 
@@ -33,6 +33,7 @@ type Config struct {
 	NoPrint            bool   // to prints except error messages
 	InitialReplication bool   // compares disks if they are the same by doing checksums of blocks
 	FullReplicate bool
+	FullScan bool
 	Benchmark bool
 }
 
@@ -104,7 +105,8 @@ func NewConfig() *Config {
 	flag.BoolVar(&cfg.NoPrint, "noprint", DefaultNoPrint, "Disables prints")
 	flag.BoolVar(&cfg.InitialReplication, "noreplication", DefaultInitialReplication, "Disables replication when started")
 	flag.BoolVar(&cfg.Benchmark, "benchmark", DefaultBenchmark, "Enables benchmark info")
-	flag.BoolVar(&cfg.FullReplicate, "fullscan", DefaultFullReplicate, "Performs full replication at the start of the deamon")
+	flag.BoolVar(&cfg.FullScan, "fullscan", DefaultFullScan, "Performs full replication at the start of the deamon")
+	flag.BoolVar(&cfg.FullReplicate, "fullreplication", DefaultFullReplicate, "Transmits the entire disk at the start of the deamon")
 	flag.Parse()
 
 	cfg.InitialReplication = !cfg.InitialReplication

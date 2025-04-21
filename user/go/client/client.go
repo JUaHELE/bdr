@@ -300,7 +300,7 @@ func (c *Client) reconnectToServer() {
 			if state == StateHashing {
 				c.StartHashing()
 			} else if state == StateReplicating {
-				
+				c.StartHashing()
 			}
 
 			c.Println("Successfully reconnected to server")
@@ -621,13 +621,11 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 	}
 }
 
-func (c *Client) InitReplication(replicationWg *sync.WaitGroup) {
-	defer replicationWg.Done()
+func (c *Client) InitReplication(wg *sync.WaitGroup) {
+	wg.Done()
 	numWorkers := runtime.NumCPU()
 	blockSize := networking.HashedSpaceBase
 
-	s.SetState(StateReplicating)
-	
 	type readItem struct {
 		offset uint64
 		size   uint32
@@ -651,6 +649,10 @@ func (c *Client) InitReplication(replicationWg *sync.WaitGroup) {
 	go func() {
 		defer close(readChan)
 		for offset := uint64(0); offset < diskSize; offset += uint64(blockSize) {
+			if c.CheckTermination() {
+				return
+			}
+
 			size := uint32(blockSize)
 			// Handle the last block which might be smaller
 			if offset+uint64(size) > diskSize {
@@ -672,6 +674,10 @@ func (c *Client) InitReplication(replicationWg *sync.WaitGroup) {
 			go func() {
 				defer readWg.Done()
 				for item := range readChan {
+					if c.CheckTermination() {
+						return
+					}
+
 					buf := make([]byte, item.size)
 					if _, err := c.UnderDevFile.ReadAt(buf, int64(item.offset)); err != nil && err != io.EOF {
 						c.VerbosePrintln("Error while reading the disk:", err)
@@ -695,6 +701,9 @@ func (c *Client) InitReplication(replicationWg *sync.WaitGroup) {
 		go func() {
 			defer sendWg.Done()
 			for item := range sendChan {
+				if c.CheckTermination() {
+					return
+				}
 				// Send the block data through the network
 				c.SendReplicationBlock(item.buffer, item.offset, item.size)
 				
@@ -707,6 +716,9 @@ func (c *Client) InitReplication(replicationWg *sync.WaitGroup) {
 	
 	packet := CreateInfoPacket(networking.PacketTypeInfoReplicationCompleted)
 	c.SendPacket(packet)
+
+	c.MonitorPauseContr.Resume()
+	c.SetState(StateWriting)
 }
 
 func (c *Client) SendReplicationBlock(data []byte, offset uint64, size uint32) {
@@ -802,11 +814,11 @@ func (c *Client) InitHashing(hashChan chan *networking.Packet, hashWg *sync.Wait
 			defer compWg.Done()
 			for comp := range compChan {
 				if comp.hash != comp.hashInfo.Hash {
-					c.DebugPrintln("Blocks are not equal")
+					c.DebugPrintln("Blocks are not equal on offset:", comp.hashInfo.Offset)
 					// Send the correct block data if hashes don't match
 					c.SendCorrectBlock(comp.buffer, comp.hashInfo.Offset, comp.hashInfo.Size)
 				} else {
-					c.DebugPrintln("Blocks are equal...")
+					c.DebugPrintln("Blocks are equal on offset", comp.hashInfo.Offset)
 				}
 			}
 		}()
@@ -961,9 +973,17 @@ func (c *Client) FullReplicate() {
 func (c *Client) Run() {
 	c.Println("Starting bdr client connected to", c.Config.IpAddress, "and port", c.Config.Port)
 
-	if c.Config.FullReplicate {
+	var replicationWg sync.WaitGroup
+	defer replicationWg.Wait()
+
+	if c.Config.FullScan {
 		c.FullScan()
-	} else if c.Config.InitialReplication {
+	} else if c.Config.FullReplicate {
+		c.FullReplicate()
+
+		replicationWg.Add(1)
+		go c.InitReplication(&replicationWg)
+	} else if !c.Config.InitialReplication {
 		c.StartHashing()
 	}
 

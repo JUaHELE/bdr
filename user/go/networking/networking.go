@@ -16,6 +16,7 @@ const (
 const (
 	PacketTypeCmdStartHashing = iota
 	PacketTypeCmdStartFullScan
+	PacketTypeCmdStartFullReplication
 	PacketTypeInfoHashingCompleted
 	PacketTypeInfoStartHashing
 	PacketTypeInfoInit
@@ -97,4 +98,5 @@ func RegisterGobPackets() {
 	gob.Register(HashInfo{})
 	gob.Register(InitInfo{})
 	gob.Register(CorrectBlockInfo{})
+	gob.Register(ReplicationBlockInfo{})
 }
