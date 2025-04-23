@@ -983,7 +983,7 @@ func (c *Client) Run() {
 
 		replicationWg.Add(1)
 		go c.InitReplication(&replicationWg)
-	} else if !c.Config.InitialReplication {
+	} else if c.Config.InitialReplication {
 		c.StartHashing()
 	}
 
