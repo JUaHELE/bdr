@@ -284,22 +284,54 @@ func (c *Client) reconnectToServer() {
 		// Attempt to connect with timeout
 		conn, err := net.DialTimeout("tcp", address, 2*time.Second)
 		if err == nil {
-			// Connection successful
-			c.Conn = conn
-			c.Encoder = gob.NewEncoder(conn)
-			c.Decoder = gob.NewDecoder(conn)
 
 			// Resend initialization packet
-			if err := c.SendInitPacket(c.Config.UnderDevicePath); err != nil {
-				c.Println("Failed to resend init packet during reconnection")
+			deviceSize, err := utils.GetDeviceSize(c.Config.UnderDevicePath)
+			if err != nil {
+				conn.Close()
+				RetrySleep()
 				continue
 			}
+
+			// Create initialization packet with device information
+			initPacket := networking.InitInfo{
+				DeviceSize:     deviceSize,
+				WriteInfoSize:  c.TargetInfo.WriteInfoSize,
+				BufferByteSize: c.TargetInfo.BufferByteSize,
+			}
+
+			packet := networking.Packet{
+				PacketType: networking.PacketTypeInfoInit,
+				Payload:    initPacket,
+			}
+
+			encoder := gob.NewEncoder(conn)
+
+			// Send the initialization packet
+			err = encoder.Encode(packet)
+			if err != nil {
+				if terminated := c.CheckTermination(); terminated {
+					c.VerbosePrintln("Terminating attepmt for packet send...")
+					return
+				}
+
+				c.VerbosePrintln("Can't reconnect to server: ", err)
+				RetrySleep()
+				conn.Close()
+				continue
+			}
+
+			c.Conn = conn
+			c.Encoder = encoder
+			c.Decoder = gob.NewDecoder(conn)
 
 			// Request hash check if needed
 			state := c.GetState()
 			if state == StateHashing {
 				c.StartHashing()
 			} else if state == StateReplicating {
+				c.StartHashing()
+			} else if state == StateWriting {
 				c.StartHashing()
 			}
 
