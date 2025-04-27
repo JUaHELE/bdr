@@ -516,6 +516,8 @@ func (s *Server) HandleWritePackets(writeQueue chan *networking.Packet, wg *sync
 	wg.Done()
 
 	for packet := range writeQueue {
+		writeTimer := benchmark.NewTimer("Write timer")
+
 		state := s.GetState()
 		if state != StateWriting {
 			continue
@@ -531,7 +533,6 @@ func (s *Server) HandleWritePackets(writeQueue chan *networking.Packet, wg *sync
 		// Calculate disk offset based on sector number and size
 		dataToWrite := writeInfo.Data[:writeInfo.Size]
 
-		s.Stats.RecordWrite(uint64(writeInfo.Size))
 
 		// Write data to the target device
 		for {
@@ -542,6 +543,9 @@ func (s *Server) HandleWritePackets(writeQueue chan *networking.Packet, wg *sync
 			break
 		}
 		s.TargetDevFd.Sync()
+
+		elapsed := writeTimer.Stop()
+		s.Stats.RecordWrite(elapsed, uint64(writeInfo.Size))
 	}
 }
 
@@ -760,7 +764,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		}
 		return
 	}
-
+	/*
 	// Verify device sizes match
 	if err := s.CheckValidSizes(); err != nil {
 		s.Println("Source device and replica don't have the same size")
@@ -771,7 +775,8 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			s.VerbosePrintln("Can't send init info packet:", err)
 		}
 		return
-	}
+	*/
+
 
 	if err := s.CreateJournal(); err != nil {
 		s.Println("Can't create journal:", err)

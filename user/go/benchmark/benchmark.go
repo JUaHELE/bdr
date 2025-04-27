@@ -16,6 +16,7 @@ type BenchmarkStats struct {
 	HashingBytes       uint64
 	BufferOverflows    uint64
 	ReconnectionEvents uint64
+	WritingTime time.Duration
 	mu                 sync.Mutex
 }
 
@@ -28,7 +29,7 @@ func NewBenchmarkStats(up bool) *BenchmarkStats {
 }
 
 // RecordWrite adds a write operation to the stats
-func (bs *BenchmarkStats) RecordWrite(bytes uint64) {
+func (bs *BenchmarkStats) RecordWrite(duration time.Duration, bytes uint64) {
 	if bs.Up == false {
 		return
 	}
@@ -36,6 +37,7 @@ func (bs *BenchmarkStats) RecordWrite(bytes uint64) {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	bs.TotalBytesWritten += bytes
+	bs.WritingTime += duration
 	bs.TotalPacketsSent++
 }
 
@@ -78,7 +80,6 @@ func (bs *BenchmarkStats) PrintStats() {
 	if bs.Up == false {
 		return
 	}
-
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	
@@ -89,13 +90,25 @@ func (bs *BenchmarkStats) PrintStats() {
 	
 	// Replication throughput
 	if bs.TotalBytesWritten > 0 {
-		bytesPerSec := float64(bs.TotalBytesWritten) / elapsed
-		fmt.Printf("Replication throughput: %.2f MB/s (%.2f MiB/s)\n", 
-			bytesPerSec / 1000000, bytesPerSec / 1048576)
-		fmt.Printf("Total data transferred: %.2f GB (%.2f GiB)\n", 
+		writingSeconds := bs.WritingTime.Seconds()
+		if writingSeconds > 0 {
+			throughputMBs := float64(bs.TotalBytesWritten) / writingSeconds / 1000000
+			throughputMiBs := float64(bs.TotalBytesWritten) / writingSeconds / 1048576
+			fmt.Printf("Replication throughput: %.2f MB/s (%.2f MiB/s)\n", 
+				throughputMBs, throughputMiBs)
+		} else {
+			fmt.Println("Replication throughput: N/A (writing time too small to measure)")
+		}
+		
+		fmt.Printf("Total data transferred: %.2f GB (%.2f GiB)\n",
 			float64(bs.TotalBytesWritten) / 1000000000, float64(bs.TotalBytesWritten) / 1073741824)
-		fmt.Printf("Packets sent: %d (avg %.2f KB/packet)\n", 
-			bs.TotalPacketsSent, float64(bs.TotalBytesWritten) / float64(bs.TotalPacketsSent) / 1000)
+		
+		if bs.TotalPacketsSent > 0 {
+			fmt.Printf("Packets sent: %d \n",
+				bs.TotalPacketsSent)
+		} else {
+			fmt.Println("Packets sent: 0")
+		}
 	}
 	
 	// Hashing performance
@@ -103,10 +116,14 @@ func (bs *BenchmarkStats) PrintStats() {
 		hashingSeconds := bs.HashingTime.Seconds()
 		if hashingSeconds > 0 {
 			hashRate := float64(bs.HashingBytes) / hashingSeconds
-			fmt.Printf("Hashing performance: %.2f MB/s (%.2f MiB/s)\n", 
+			fmt.Printf("Hashing performance: %.2f MB/s (%.2f MiB/s)\n",
 				hashRate / 1000000, hashRate / 1048576)
 			fmt.Printf("Total time spent hashing: %.2f seconds\n", hashingSeconds)
-			fmt.Printf("Total data hashed: %.2f GB (%.2f GiB)\n", 
+			fmt.Printf("Total data hashed: %.2f GB (%.2f GiB)\n",
+				float64(bs.HashingBytes) / 1000000000, float64(bs.HashingBytes) / 1073741824)
+		} else {
+			fmt.Println("Hashing performance: N/A (hashing time too small to measure)")
+			fmt.Printf("Total data hashed: %.2f GB (%.2f GiB)\n",
 				float64(bs.HashingBytes) / 1000000000, float64(bs.HashingBytes) / 1073741824)
 		}
 	}
