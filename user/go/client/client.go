@@ -547,11 +547,11 @@ func (c *Client) StartHashing() {
 }
 
 // ProcessBufferInfo processes write operations stored in the buffer
-func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo) {
+func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo, mainLoop bool) {
 	// Process each write operation in the buffer
 	for i := uint64(0); i < bufferInfo.Length; i++ {
 		// Skip if monitor is paused (during hash verification)
-		if c.MonitorPauseContr.IsPaused() {
+		if c.MonitorPauseContr.IsPaused() && mainLoop {
 			return
 		}
 
@@ -649,7 +649,7 @@ func (c *Client) MonitorChanges(wg *sync.WaitGroup) {
 		}
 
 		// Process the write operations in the buffer
-		c.ProcessBufferInfo(&bufferInfo)
+		c.ProcessBufferInfo(&bufferInfo, true)
 	}
 }
 
@@ -749,8 +749,6 @@ func (c *Client) InitReplication(wg *sync.WaitGroup) {
 	packet := CreateInfoPacket(networking.PacketTypeInfoReplicationCompleted)
 	c.SendPacket(packet)
 
-	c.MonitorPauseContr.Resume()
-	c.SetState(StateWriting)
 }
 
 func (c *Client) SendReplicationBlock(data []byte, offset uint64, size uint32) {
@@ -893,7 +891,7 @@ func (c *Client) SendBuffer() bool {
 	}
 
 	// Process the write operations in the buffer
-	c.ProcessBufferInfo(&bufferInfo)
+	c.ProcessBufferInfo(&bufferInfo, false)
 
 	return true
 }
@@ -936,6 +934,9 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 			close(hashQueue)
 			hashWg.Wait()
 			c.ProcessBuffer()
+
+			c.MonitorPauseContr.Resume()
+			c.SetState(StateWriting)
 
 			hashQueue = make(chan *networking.Packet, HashPacketQueueSize)
 		case networking.PacketTypeErrJournalOverflow:
