@@ -935,9 +935,6 @@ func (c *Client) ListenPackets(wg *sync.WaitGroup) {
 			hashWg.Wait()
 			c.ProcessBuffer()
 
-			c.MonitorPauseContr.Resume()
-			c.SetState(StateWriting)
-
 			hashQueue = make(chan *networking.Packet, HashPacketQueueSize)
 		case networking.PacketTypeErrJournalOverflow:
 			close(hashQueue)
