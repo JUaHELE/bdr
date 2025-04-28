@@ -764,7 +764,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 		}
 		return
 	}
-	/*
+	
 	// Verify device sizes match
 	if err := s.CheckValidSizes(); err != nil {
 		s.Println("Source device and replica don't have the same size")
@@ -775,7 +775,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 			s.VerbosePrintln("Can't send init info packet:", err)
 		}
 		return
-	*/
+	}
 
 
 	if err := s.CreateJournal(); err != nil {

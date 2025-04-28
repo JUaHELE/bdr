@@ -128,5 +128,3 @@ For secure replication over a network, it is recommended to use an encrypted tun
 ## Testing
 
 The `test/shell/` directory contains test scripts to verify correct functionality. Due to the nature of these tests, they must be executed with root privileges to set up test loop devices and load the kernel module.
-
-`run_tests.sh` script is available for executing all the tests
