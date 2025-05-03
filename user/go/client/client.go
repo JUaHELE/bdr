@@ -749,6 +749,8 @@ func (c *Client) InitReplication(wg *sync.WaitGroup) {
 	packet := CreateInfoPacket(networking.PacketTypeInfoReplicationCompleted)
 	c.SendPacket(packet)
 
+	c.SetState(StateWriting)
+	c.MonitorPauseContr.Resume()
 }
 
 func (c *Client) SendReplicationBlock(data []byte, offset uint64, size uint32) {
