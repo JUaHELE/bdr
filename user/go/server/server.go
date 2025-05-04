@@ -109,7 +109,7 @@ func (s *Server) SetState(newState State) {
 	oldState := s.state
 	s.state = newState
 
-	s.VerbosePrintln("Server transitioned from", oldState, "to", newState)
+	s.DebugPrintln("Server transitioned from", oldState, "to", newState)
 }
 
 // Println logs a message with standard priority
@@ -160,7 +160,7 @@ func NewServer(cfg *Config) (*Server, error) {
 		TermChan:    make(chan struct{}),
 		Connected:   false,
 		Stats:       benchmark.NewBenchmarkStats(cfg.Benchmark),
-		state:       StateWriting,
+		state:       StateDisconnected,
 	}
 
 	return server, nil
@@ -1115,6 +1115,24 @@ func main() {
 	err := ValidateArgs(&cfg.TargetDevPath, &cfg.Port, &cfg.IpAddress, &cfg.JournalPath)
 	if err != nil {
 		log.Fatalf("Invalid arguments: %v", err)
+	}
+
+	isDevice, err := utils.IsDevice(cfg.TargetDevPath)
+	if err != nil  {
+		log.Fatalf("Failed to check if there is device on target path", err)
+	}
+	
+	if !isDevice {
+		log.Fatalf("Target has to be a device (e.g. /dev/loop0)")
+	}
+
+	isDevice, err = utils.IsDevice(cfg.JournalPath)
+	if err != nil  {
+		log.Fatalf("Failed to check if there is device on journal path", err)
+	}
+	
+	if !isDevice {
+		log.Fatalf("Journal has to be a device (e.g. /dev/loop0)")
 	}
 
 	// Create and initialize server

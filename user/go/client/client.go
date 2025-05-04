@@ -99,7 +99,7 @@ func (c *Client) SetState(newState State) {
 	oldState := c.state
 	c.state = newState
 
-	c.VerbosePrintln("Client transitioned from", oldState, "to", newState)
+	c.DebugPrintln("Client transitioned from", oldState, "to", newState)
 }
 
 func (c *Client) InitiateShutdown() {

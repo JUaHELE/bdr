@@ -187,3 +187,14 @@ func PrintBitmap(bitmap []byte, maxBlocks uint64) string {
 
 	return builder.String()
 }
+
+func IsDevice(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	
+	mode := info.Mode()
+	
+	return mode&os.ModeDevice != 0, nil
+}
