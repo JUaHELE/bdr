@@ -8,5 +8,6 @@ require github.com/cespare/xxhash v1.1.0
 
 require (
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
+	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
 )

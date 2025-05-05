@@ -1,11 +1,11 @@
 // server
-
 package main
 
 import (
-	"flag"
 	"fmt"
 	"strings"
+
+	"github.com/spf13/pflag"
 )
 
 const (
@@ -34,19 +34,16 @@ func ValidateArgs(targetDevicePath *string, port *int, ipAddress *string, journa
 	var missingArgs []string
 
 	if targetDevicePath == nil || *targetDevicePath == DefaultTargetDevicePath {
-		missingArgs = append(missingArgs, "-target (target device path)")
+		missingArgs = append(missingArgs, "--target-device (target device path)")
 	}
-
 	if port == nil || *port == DefaultPort {
-		missingArgs = append(missingArgs, "-port (port to listen on)")
+		missingArgs = append(missingArgs, "--port (port to listen on)")
 	}
-
 	if ipAddress == nil || *ipAddress == DefaultIpAddress {
-		missingArgs = append(missingArgs, "-address (IP address to listen on)")
+		missingArgs = append(missingArgs, "--address (IP address to listen on)")
 	}
-
 	if journalPath == nil || *journalPath == DefaultJournalPath {
-		missingArgs = append(missingArgs, "-journal (path to a device to store journal)")
+		missingArgs = append(missingArgs, "--journal (path to a device to store journal)")
 	}
 
 	if len(missingArgs) > 0 {
@@ -60,7 +57,6 @@ func (c *Config) Println(args ...interface{}) {
 	if c.NoPrint {
 		return
 	}
-
 	fmt.Println("[INFO]:", args)
 }
 
@@ -69,7 +65,6 @@ func (c *Config) VerbosePrintln(args ...interface{}) {
 	if c.NoPrint {
 		return
 	}
-
 	if c.Verbose || c.Debug {
 		fmt.Println("[VERBOSE]:", args)
 	}
@@ -80,7 +75,6 @@ func (c *Config) DebugPrintln(args ...interface{}) {
 	if c.NoPrint {
 		return
 	}
-
 	if c.Debug {
 		fmt.Println("[DEBUG]:", args)
 	}
@@ -89,14 +83,16 @@ func (c *Config) DebugPrintln(args ...interface{}) {
 func NewConfig() *Config {
 	cfg := &Config{}
 
-	flag.IntVar(&cfg.Port, "port", DefaultPort, "Port to listen on")
-	flag.StringVar(&cfg.IpAddress, "address", DefaultIpAddress, "IP address to listen on")
-	flag.StringVar(&cfg.TargetDevPath, "target", DefaultTargetDevicePath, "Path to target device")
-	flag.StringVar(&cfg.JournalPath, "journal", DefaultJournalPath, "Path to a device to store journal")
-	flag.BoolVar(&cfg.Verbose, "verbose", DefaultVerbose, "Provides verbose output of the program")
-	flag.BoolVar(&cfg.Debug, "debug", DefaultDebug, "Provides debug output of the program")
-	flag.BoolVar(&cfg.NoPrint, "noprint", DefaultNoPrint, "Disables prints")
-	flag.BoolVar(&cfg.Benchmark, "benchmark", DefaultBenchmark, "Enables benchmark")
-	flag.Parse()
+	pflag.IntVar(&cfg.Port, "port", DefaultPort, "Port to listen on")
+	pflag.StringVar(&cfg.IpAddress, "address", DefaultIpAddress, "IP address to listen on")
+	pflag.StringVar(&cfg.TargetDevPath, "target-device", DefaultTargetDevicePath, "Path to target device")
+	pflag.StringVar(&cfg.JournalPath, "journal", DefaultJournalPath, "Path to a device to store journal")
+	pflag.BoolVar(&cfg.Verbose, "verbose", DefaultVerbose, "Provides verbose output of the program")
+	pflag.BoolVar(&cfg.Debug, "debug", DefaultDebug, "Provides debug output of the program")
+	pflag.BoolVar(&cfg.NoPrint, "no-print", DefaultNoPrint, "Disables prints")
+	pflag.BoolVar(&cfg.Benchmark, "benchmark", DefaultBenchmark, "Enables benchmark")
+
+	pflag.Parse()
+
 	return cfg
 }

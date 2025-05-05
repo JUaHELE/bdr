@@ -1,9 +1,9 @@
 # BDR: Block Device Replicator
 
 ## Introduction
-BDR (Block Device Replicator) is a real-time, network-based block device replication solution designed for Linux. BDR observes writes made to a specified device and sends them over the network to a designated destination, where the receiver daemon writes them to a backup device, essentially mirroring RAID 1 functionality.
+BDR (Block Device Replicator) is a real-time, network-based block device replication solution designed for Linux. BDR observes writes made to a specified device and sends them over the network to a designated destination, where the receiver daemon writes them to a backup device, essentially mirroring RAID 1 functionality over the network.
 
-If the disk experiences high load and the client daemon cannot send new writes quickly enough, a complete disk scan is necessary. When the client daemon starts, it performs a full disk scan to ensure consistency. The initial scan can be turned off if you are sure that devices are identical (not advised).
+If the disk experiences high load and the client daemon cannot send new writes quickly enough, a complete disk scan is necessary to ensure consistency. The client daemon performs a full disk scan at startup by default to ensure consistency (this can be disabled if you're certain devices are identical, though this is not recommended).
 
 ## Requirements
 
@@ -12,19 +12,20 @@ If the disk experiences high load and the client daemon cannot send new writes q
 * Linux Kernel Headers
 * Go >= 1.23.0
 
-## Installation
+## Installation Tutorial
 
-### Clone the Repository
+This tutorial will guide you through setting up BDR for local testing using loop devices.
 
-First, clone the BDR repository to your local machine:
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/JUaHELE/bdr.git
+cd bdr
 ```
 
-### Build the Kernel Driver
+### 2. Build the Kernel Driver
 
-Navigate to the `kern/` directory and build the kernel driver, then load it into the kernel:
+Build and load the kernel driver:
 
 ```bash
 cd kern/
@@ -32,99 +33,160 @@ make
 sudo insmod bdr.ko
 ```
 
-### Build the Userspace Daemons
+Verify the module is loaded:
 
 ```bash
-cd user/go/client
+lsmod | grep bdr
+```
+
+### 3. Build the Userspace Daemons
+
+Build both the client and server applications:
+
+```bash
+# Build the client daemon
+cd ../user/client
 go build -o bdr_client
 
-cd user/go/server
+# Build the server daemon
+cd ../server
 go build -o bdr_server
+
+# Copy binaries to a convenient location (optional)
+sudo cp bdr_client /usr/local/bin/
+sudo cp bdr_server /usr/local/bin/
 ```
 
-### Setup the Device Target
+### 4. Create Test Loop Devices
 
-For this purpose, there is a `setup.sh` script in the `bdr` directory. If you want to manually create a device mapper target, you can do that with following command:
+For testing purposes, we'll create two loop devices to use as source and destination:
 
 ```bash
-echo "0 $(blockdev --getsz $underlying_device_path) bdr $underlying_device_path $character_device_name $buffer_size_in_writes" | sudo dmsetup create "$mapper_name"
+# Create 1GB test files
+sudo dd if=/dev/zero of=/tmp/source_disk.img bs=1M count=1024
+sudo dd if=/dev/zero of=/tmp/target_disk.img bs=1M count=1024
+sudo dd if=/dev/zero of=/tmp/journal_disk.img bs=256M count=1
+
+# Create loop devices from these files
+sudo losetup /dev/loop0 /tmp/source_disk.img
+sudo losetup /dev/loop1 /tmp/target_disk.img
+sudo losetup /dev/loop2 /tmp/journal_disk.img
 ```
 
-After successfull target setup you should see a character device at `/dev/$character_device_name` and device mapper at `/dev/$mapper_name`.
+### 5. Setup the Kernel Module
 
-You should now only communicate with the underlying device through the the mapper path, not the original `$underlying_device_path`
-
-The buffer is a shared structure between the kernel and userspace daemon, where the kernel places write information. One write structure is 4104 bytes long. The size of the buffer depends on load of the dis k and the speed of the internet connection.
+To create the device mapper target, control device and allocate buffer space use following script. As mapper name enter `bdr_source`, character device name `bdr_control` and buffer size for example `20M`.
 
 ```bash
 sudo ./setup.sh
 ```
 
-The `setup.sh` script has to run with root privileges, because of dmsetup
+Now we have:
+- Source device available at: `/dev/mapper/bdr_source`
+- BDR control device at: `/dev/bdr_control`
+- Source device at: `/dev/loop0`
+- Target device at: `/dev/loop1`
+- Journal device at: `/dev/loop2`
 
-## Usage
+### 6. Start the Server
+
+Start the server first:
+
+```bash
+sudo bdr_server --address 127.0.0.1 --port 8000 --target /dev/loop1 --journal /dev/loop2 --verbose
+```
+
+### 7. Start the Client
+
+In a new terminal, start the client:
+
+```bash
+sudo bdr_client --control-device /dev/bdr_control --source-device /dev/mapper/bdr_source --address 127.0.0.1 --port 8000 --verbose
+```
+
+The replication begins automatically. The client will perform an initial full scan to ensure consistency.
+
+### 8. Test the Replication
+
+After the initial scan you can test the replication by writing to the source device and verifying the changes appear on the target:
+
+```bash
+# Mount the source
+sudo mkdir -p /mnt/source
+sudo mount /dev/mapper/bdr_source /mnt/source
+
+# Create some test files
+sudo dd if=/dev/urandom of=/mnt/source/test1.bin bs=1M count=10
+sudo dd if=/dev/urandom of=/mnt/source/test2.bin bs=1M count=10
+
+sync
+
+# Unmount
+sudo umount /mnt/source
+
+# Mount target and verify
+sudo mkdir -p /mnt/target
+sudo mount /dev/loop1 /mnt/target
+ls -la /mnt/target
+sudo umount /mnt/target
+```
+
+### 9. Cleanup
+
+When you're done, clean up the environment:
+
+```bash
+# Stop both client and server daemons (Ctrl+C)
+
+# Remove the device mapper
+sudo dmsetup remove bdr_source
+
+# Unload the kernel module
+sudo rmmod bdr
+
+# Remove loop devices
+sudo losetup -d /dev/loop0
+sudo losetup -d /dev/loop1
+sudo losetup -d /dev/loop2
+
+# Remove the test files
+sudo rm /tmp/source_disk.img /tmp/target_disk.img /tmp/journal_disk.img
+```
+
+## Command Line Options
 
 ### Client Options
 
 ```
-  -address string
-    	Receiver IP address (required)
-  -fullscan
-    	Initiates direct full scan after start of the daemon
-  -chardev string
-    	Path to BDR character device (required)
-  -noprint
-    	Disables prints
-  -noreplication
-    	Disables replication when started
-  -port int
-    	Receiver port
-  -mapperdev string
-    	Path to underlying device, used only for reading (required)
-  -verbose
-    	Provides verbose output of the program
+  --address string       Receiver IP address (required)
+  --control-device       Path to BDR control character device (required)
+  --full-scan            Initiates direct full scan after start of the daemon
+  --full-replication     Initiates full replication after start of the daemon
+  --no-replication       Disables replication when started
+  --port int             Receiver port (required)
+  --source-device        Path to BDR source device mapper (required)
+  --verbose              Provides verbose output of the program
+  --debug                Provides detailed debug information
 ```
-
-To clarify `-chardev` path specifies character device created in target setup step (`/dev/$character_device_name`) and the `-mapperdev` specifies the mapper created in target setup step (`/dev/$mapper_name`).
-
-Client has to run with root privileges since it has to open character device and the mapper device. The mapper device is used only for reading the disk when full scanning
 
 ### Server Options
 
 ```
-  -address string
-    	IP address to listen on (required)
-  -noprint
-    	Disables prints
-  -port int
-    	Port to listen on
-  -target string
-    	Path to target device (required)
-  -verbose
-    	Provides verbose output of the program
-  -journal string
-    	Path to disk, where journal will be saved (required)
+  --address string         IP address to listen on (required)
+  --port int               Port to listen on (required)
+  --target-device string   Path to replica destination device (required)
+  --journal string         Path to journal device (required)
+  --verbose                Provides verbose output of the program
+  --debug                  Provides debug output of the program
 ```
 
-Server has to also run with root privileges because it has to open the target device specified by `-target` to propagate reads.
+## Running Tests
 
-## Removal
-
-To remove the device mapper target:
+The project includes test scripts in the `test/shell/` directory:
 
 ```bash
-dmsetup remove $target_name
+cd test/shell/
+sudo ./run_all_tests.sh
 ```
 
-To remove the kernel module:
-
-```bash
-rmmod bdr
-```
-
-## Configure Your Tunneling Solution (Recommended)
-For secure replication over a network, it is recommended to use an encrypted tunneling solution such as SSH tunneling, WireGuard, or VPN. Ensure low-latency connectivity for optimal performance.
-
-## Testing
-
-The `test/shell/` directory contains test scripts to verify correct functionality. Due to the nature of these tests, they must be executed with root privileges to set up test loop devices and load the kernel module.
+Tests can be run independently, expected output will show the test results with "TEST PASSED" or "TEST FAILED" prints for each test case. The `run_all_tests.sh` will summarize the test results.

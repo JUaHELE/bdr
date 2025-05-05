@@ -5,14 +5,28 @@ TMP_DIR=$(mktemp -d)
 
 SRC_DIR="../../kern/"
 
+GREEN="\033[0;32m"
+RED="\033[0;31m"
+YELLOW="\033[0;33m"
+BLUE="\033[0;34m"
+NC="\033[0m"
+
 # FUNCTIONS ------
+
+test_passed() {
+	echo -e "${GREEN}[RESULT]: TEST PASSED${NC}"
+}
+
+test_failed() {
+	echo -e "${RED}[RESULT]: TEST FAILED${NC}"
+}
 
 log_info() {
 	echo "[INFO]: $1"
 }
 
 error_exit() {
-	echo "[ERROR]: $1" >&2
+	echo -e "${RED}[ERROR]: $1${NC}"
 	exit 1
 }
 
@@ -31,7 +45,7 @@ load_driver() {
 
 check_root() {
 	if [[ $EUID -ne 0 ]]; then
-		echo "This test script must be run as a root." >&2
+		echo -e "${RED}This test script must be run as a root.${NC}"
 		exit 1
 	fi
 }

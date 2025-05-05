@@ -54,7 +54,7 @@ cleanup() {
     fi
 
     log_info "Removing daemon binaries..."
-    pushd ../../user/go/ > /dev/null
+    pushd ../../user/ > /dev/null
     rm $CLIENT_BIN $SERVER_BIN
     popd > /dev/null
 
@@ -81,13 +81,13 @@ if [[ ${#LOOP_DEVICES[@]} -ne 3 ]]; then
     error_exit "There should be exactly 3 loop devices, found ${#LOOP_DEVICES[@]}."
 fi
 
-CLIENT_ARGS="-chardev /dev/bdr-1 -mapperdev /dev/mapper/bdr-1 -address 127.0.0.1 -port 9832 -noprint -fullscan"
-SERVER_ARGS="-target ${LOOP_DEVICES[$LOOPDEV_ID]} -port 9832 -address 127.0.0.1 -noprint -journal ${LOOP_DEVICES[$LOOPDEV_JOURNAL_ID]}"
+CLIENT_ARGS="--control-device /dev/bdr-1 --source-device /dev/mapper/bdr-1 --address 127.0.0.1 --port 9832 --full-scan"
+SERVER_ARGS="--target-device ${LOOP_DEVICES[$LOOPDEV_ID]} --port 9832 --address 127.0.0.1 --no-print --journal ${LOOP_DEVICES[$LOOPDEV_JOURNAL_ID]}"
 
 compile_and_start_daemons() {
     log_info "Compiling and starting daemons..."
 
-    pushd ../../user/go/ > /dev/null
+    pushd ../../user/ > /dev/null
 
     go build -C client || error_exit "Failed to build client daemon."
     go build -C server || error_exit "Failed to build server daemon."

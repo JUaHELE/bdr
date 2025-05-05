@@ -1,4 +1,4 @@
-# BDR: Block Device Replicator
+#BDR: Block Device Replicator
 # User Manual
 
 ## Table of Contents
@@ -13,7 +13,7 @@
    - [Setting Up the Device Target](#setting-up-the-device-target)
    - [Configuration Options](#configuration-options)
    - [Buffer Size Considerations](#buffer-size-considerations)
-   - [Different Types of Recoveries](#different-types-of-Recoveries)
+   - [Different Types of Recoveries](#different-types-of-recoveries)
 5. [Usage](#usage)
    - [Client Configuration](#client-configuration)
    - [Server Configuration](#server-configuration)
@@ -88,11 +88,11 @@ To build these daemons:
 
 ```bash
 # Build the client daemon
-cd user/go/client
+cd user/client
 go build -o bdr_client
 
 # Build the server daemon
-cd user/go/server
+cd user/server
 go build -o bdr_server
 ```
 
@@ -156,7 +156,7 @@ BDR provides several types of recovery mechanisms to maintain data consistency:
 
 #### Journal Scan
 
-This scan is initiated every time at the start of the client deamon unless specified `-noreplication` flag or when the buffer overflows. When this happens, some writes are lost to BDR and need to be recovered through scanning. The process works as follows:
+This scan is initiated every time at the start of the client daemon unless specified `--no-replication` flag or when the buffer overflows. When this happens, some writes are lost to BDR and need to be recovered through scanning. The process works as follows:
 
 1. The BDR server separates disk space into blocks and computes checksums
 2. These checksums are sent to the client
@@ -172,9 +172,9 @@ This approach ensures that the replica will stay in a prefix consistent state at
 
 When starting the BDR client daemon, you can choose between different recovery mechanisms:
 
-1. **Full Scan**: Initiated when the client daemon is started with the `-fullscan` flag. This scan writes the correct blocks directly to the replica without using the journal. This method is intended for cases when journal space isn't sufficient to accommodate all correct blocks.
+1. **Full Scan**: Initiated when the client daemon is started with the `--full-scan` flag. This scan writes the correct blocks directly to the replica without using the journal. This method is intended for cases when journal space isn't sufficient to accommodate all correct blocks.
 
-2. **Full Replication**: Initiated when the client daemon is started with the `-fullreplication` flag. The BDR client daemon reads the entire disk and transmits it to the server. This feature is particularly useful when initializing a replica for the first time, as checksums will differ on every block.
+2. **Full Replication**: Initiated when the client daemon is started with the `--full-replication` flag. The BDR client daemon reads the entire disk and transmits it to the server. This feature is particularly useful when initializing a replica for the first time, as checksums will differ on every block.
 
 **Note**: These approaches might temporarily corrupt the replica, so use with caution.
 
@@ -187,38 +187,40 @@ The client daemon runs on the source system and is responsible for sending write
 **Basic client configuration**:
 
 ```bash
-sudo bdr_client -chardev /dev/$character_device_name -mapperdev /dev/mapper/$mapper_name -address $server_ip -port $server_port
+sudo bdr_client --control-device /dev/$character_device_name --source-device /dev/mapper/$mapper_name --address $server_ip --port $server_port
 ```
 
 **Available client options**:
 
 ```
-  -address string
-    	Receiver IP address (required)
-  -fullscan
-    	Initiates direct full scan after start of the daemon
-  -chardev string
-    	Path to BDR character device (required)
-  -noprint
-    	Disables prints
-  -noreplication
-    	Disables replication when started
-  -port int
-    	Receiver port
-  -mapperdev string
-    	Path to underlying device, used only for reading (required)
-  -verbose
-    	Provides verbose output of the program
-  -debug
-    	Provides debug output of the program
-  -fullreplication
-    	Transmits the entire disk at the start of the deamon
+  --address string
+        Receiver IP address (required)
+  --full-scan
+        Initiates direct full scan after start of the daemon
+  --control-device string
+        Path to BDR control character device (required)
+  --no-print
+        Disables standard output
+  --no-replication
+        Disables replication when started
+  --port int
+        Receiver port
+  --source-device string
+        Path to BDR source device mapper (required)
+  --verbose
+        Provides verbose output of the program
+  --debug
+        Provides debug output of the program
+  --full-replication
+        Transmits the entire disk at the start of the daemon
+  --benchmark
+        Enables benchmark info
 ```
 
 **Example with full disk scan**:
 
 ```bash
-sudo bdr_client -chardev /dev/bdr_char -mapperdev /dev/mapper/bdr_mapper -address 127.0.0.1 -port 8000 -verbose
+sudo bdr_client --control-device /dev/bdr_char --source-device /dev/mapper/bdr_mapper --address 127.0.0.1 --port 8000 --verbose
 ```
 
 This will:
@@ -233,30 +235,34 @@ The server daemon runs on the target system and applies received write operation
 **Basic server configuration**:
 
 ```bash
-sudo bdr_server -address $listen_ip -port $listen_port -target $target_device -journal $journal_path
+sudo bdr_server --address $listen_ip --port $listen_port --target-device $target_device --journal $journal_path
 ```
 
 **Available server options**:
 
 ```
-  -address string
-    	IP address to listen on (required)
-  -noprint
-    	Disables prints
-  -port int
-    	Port to listen on
-  -target string
-    	Path to target device (required)
-  -verbose
-    	Provides verbose output of the program
-  -journal string
-    	Path to disk, where journal will be saved (required)
+  --address string
+        IP address to listen on (required)
+  --no-print
+        Disables standard output
+  --port int
+        Port to listen on
+  --target-device string
+        Path to target device (required)
+  --verbose
+        Provides verbose output of the program
+  --journal string
+        Path to disk, where journal will be saved (required)
+  --benchmark
+        Enables benchmark
+  --debug
+        Provides debug output of the program
 ```
 
 **Example server configuration**:
 
 ```bash
-sudo bdr_server -address 127.0.0.1 -port 8000 -target /dev/sdb1 -journal /dev/loop0
+sudo bdr_server --address 127.0.0.1 --port 8000 --target-device /dev/sdb1 --journal /dev/loop0
 ```
 
 This will:
@@ -269,7 +275,7 @@ This will:
 1. **Start the server daemon first** on the target system
 2. **Start the client daemon** on the source system
 
-Replication begins automatically once both daemons are running, unless the `-noreplication` flag is used on the client.
+Replication begins automatically once both daemons are running, unless the `--no-replication` flag is used on the client.
 
 ## Security Considerations
 
@@ -296,7 +302,7 @@ ssh -L 8000:localhost:8000 user@target_system -N &
 Then configure the client to connect to localhost:
 
 ```bash
-sudo bdr_client -chardev /dev/bdr_char -mapperdev /dev/mapper/bdr_mapper -address localhost -port 8000
+sudo bdr_client --control-device /dev/bdr_char --source-device /dev/mapper/bdr_mapper --address localhost --port 8000
 ```
 
 ### Using WireGuard
@@ -386,12 +392,12 @@ sudo dmsetup table $mapper_name
 
 **Client Daemon**:
 ```bash
-sudo bdr_client -chardev /dev/$character_device_name -mapperdev /dev/mapper/$mapper_name -address $server_ip -port $server_port [options]
+sudo bdr_client --control-device /dev/$character_device_name --source-device /dev/mapper/$mapper_name --address $server_ip --port $server_port [options]
 ```
 
 **Server Daemon**:
 ```bash
-sudo bdr_server -address $listen_ip -port $listen_port -target $target_device -journal $journal_path [options]
+sudo bdr_server --address $listen_ip --port $listen_port --target-device $target_device --journal $journal_path [options]
 ```
 
 ### Configuration File Reference
@@ -415,7 +421,7 @@ if ! dmsetup info $MAPPER_DEV >/dev/null 2>&1; then
 fi
 
 # Start BDR client
-sudo bdr_client -chardev $CHAR_DEV -mapperdev $MAPPER_DEV -address $SERVER_IP -port $SERVER_PORT -verbose
+sudo bdr_client --control-device $CHAR_DEV --source-device $MAPPER_DEV --address $SERVER_IP --port $SERVER_PORT --verbose
 ```
 
 **Example server script** (`start_bdr_server.sh`):
@@ -428,7 +434,7 @@ TARGET_DEV="/dev/sdb1"
 JOURNAL_PATH="/dev/loop0"
 
 # Start BDR server
-sudo bdr_server -address $LISTEN_IP -port $LISTEN_PORT -target $TARGET_DEV -journal $JOURNAL_PATH -verbose
+sudo bdr_server --address $LISTEN_IP --port $LISTEN_PORT --target-device $TARGET_DEV --journal $JOURNAL_PATH --verbose
 ```
 
 Make these scripts executable and run them to start BDR with your preferred configuration:
