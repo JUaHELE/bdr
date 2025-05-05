@@ -57,6 +57,7 @@ const (
 	StateHashing State = iota
 	StateWriting
 	StateReplicating
+	StateReconnecting
 )
 
 // Client represents a BDR client instance
@@ -82,6 +83,7 @@ func (s State) String() string {
 		"Hashing",
 		"Writing",
 		"Replicating",
+		"StateReconnecting",
 	}[s]
 }
 
@@ -265,6 +267,11 @@ func (c *Client) ServeIOCTL(cmd uintptr, arg uintptr) {
 // reconnectToServer attempts to reestablish a connection to the server
 func (c *Client) reconnectToServer() {
 	c.VerbosePrintln("Trying to reconnect to the server.")
+	pastState := c.GetState()
+	defer c.SetState(pastState)
+
+	c.SetState(StateReconnecting)
+
 	c.Stats.RecordReconnection()
 	// Close existing connection if any
 	if c.Conn != nil {
@@ -326,7 +333,7 @@ func (c *Client) reconnectToServer() {
 			c.Decoder = gob.NewDecoder(conn)
 
 			// Request hash check if needed
-			state := c.GetState()
+			state := pastState
 			if state == StateHashing {
 				c.StartHashing()
 			} else if state == StateReplicating {
@@ -608,7 +615,26 @@ func (c *Client) ProcessBufferInfo(bufferInfo *BufferInfo, mainLoop bool) {
 				Payload:    writeInfoPacket,
 			}
 
-			c.SendPacket(&packet)
+			
+			for {
+				err := c.Encoder.Encode(packet)
+				if err != nil {
+					state := c.GetState()
+					if state == StateReconnecting {
+						return
+					}
+
+					if terminated := c.CheckTermination(); terminated {
+						c.VerbosePrintln("Terminating attepmt for packet send...")
+						return
+					}
+
+					c.VerbosePrintln("SendPacket failed: ", err)
+					RetrySleep()
+					continue
+				}
+				break
+			}
 
 			// Successfully processed this write info, continue to next
 			break

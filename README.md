@@ -45,7 +45,7 @@ Build both the client and server applications:
 
 ```bash
 # Build the client daemon
-cd ../user/client
+cd user/client
 go build -o bdr_client
 
 # Build the server daemon
@@ -93,7 +93,7 @@ Now we have:
 Start the server first:
 
 ```bash
-sudo bdr_server --address 127.0.0.1 --port 8000 --target /dev/loop1 --journal /dev/loop2 --verbose
+sudo bdr_server --address 127.0.0.1 --port 8000 --target-device /dev/loop1 --journal /dev/loop2 --verbose
 ```
 
 ### 7. Start the Client
@@ -111,14 +111,17 @@ The replication begins automatically. The client will perform an initial full sc
 After the initial scan you can test the replication by writing to the source device and verifying the changes appear on the target:
 
 ```bash
+sudo mkfs.btrfs /dev/mapper/bdr_source
+
 # Mount the source
 sudo mkdir -p /mnt/source
 sudo mount /dev/mapper/bdr_source /mnt/source
 
 # Create some test files
-sudo dd if=/dev/urandom of=/mnt/source/test1.bin bs=1M count=10
-sudo dd if=/dev/urandom of=/mnt/source/test2.bin bs=1M count=10
+sudo dd if=/dev/urandom of=/mnt/source/test1.bin bs=1M count=5
+sync
 
+sudo dd if=/dev/urandom of=/mnt/source/test2.bin bs=1M count=5
 sync
 
 # Unmount
@@ -182,7 +185,7 @@ sudo rm /tmp/source_disk.img /tmp/target_disk.img /tmp/journal_disk.img
 
 ## Running Tests
 
-The project includes test scripts in the `test/shell/` directory:
+The project includes test scripts in the `test/shell/` directory and can be run independently or with dedicated script `run_all_tests.sh`:
 
 ```bash
 cd test/shell/

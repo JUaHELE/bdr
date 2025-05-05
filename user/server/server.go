@@ -488,7 +488,7 @@ func (s *Server) CheckValidSizes() error {
 	deviceSize, err := utils.GetDeviceSize(s.Config.TargetDevPath)
 	if err != nil || deviceSize != s.ClientInfo.DeviceSize {
 		// Send error packet to client
-		return fmt.Errorf("Client has different size of the block device")
+		return fmt.Errorf("Source disk size: %d, Destination disk size: %d", deviceSize, s.ClientInfo.DeviceSize)
 	}
 	return nil
 }
@@ -767,7 +767,7 @@ func (s *Server) HandleClient(wg *sync.WaitGroup) {
 	
 	// Verify device sizes match
 	if err := s.CheckValidSizes(); err != nil {
-		s.Println("Source device and replica don't have the same size")
+		s.Println("Source device and replica don't have the same size:", err)
 
 		errPacket := CreateInfoPacket(networking.PacketTypeErrInvalidSizes)
 		err := s.SendPacket(errPacket)
