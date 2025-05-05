@@ -51,10 +51,6 @@ go build -o bdr_client
 # Build the server daemon
 cd ../server
 go build -o bdr_server
-
-# Copy binaries to a convenient location (optional)
-sudo cp bdr_client /usr/local/bin/
-sudo cp bdr_server /usr/local/bin/
 ```
 
 ### 4. Create Test Loop Devices
@@ -93,7 +89,7 @@ Now we have:
 Start the server first:
 
 ```bash
-sudo bdr_server --address 127.0.0.1 --port 8000 --target-device /dev/loop1 --journal /dev/loop2 --verbose
+sudo ./bdr_server --address 127.0.0.1 --port 8000 --target-device /dev/loop1 --journal /dev/loop2 --verbose
 ```
 
 ### 7. Start the Client
@@ -101,7 +97,7 @@ sudo bdr_server --address 127.0.0.1 --port 8000 --target-device /dev/loop1 --jou
 In a new terminal, start the client:
 
 ```bash
-sudo bdr_client --control-device /dev/bdr_control --source-device /dev/mapper/bdr_source --address 127.0.0.1 --port 8000 --verbose
+sudo ./bdr_client --control-device /dev/bdr_control --source-device /dev/mapper/bdr_source --address 127.0.0.1 --port 8000 --verbose
 ```
 
 The replication begins automatically. The client will perform an initial full scan to ensure consistency.
