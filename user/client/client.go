@@ -268,7 +268,6 @@ func (c *Client) ServeIOCTL(cmd uintptr, arg uintptr) {
 func (c *Client) reconnectToServer() {
 	c.VerbosePrintln("Trying to reconnect to the server.")
 	pastState := c.GetState()
-	defer c.SetState(pastState)
 
 	c.SetState(StateReconnecting)
 
@@ -340,6 +339,8 @@ func (c *Client) reconnectToServer() {
 				c.StartHashing()
 			} else if state == StateWriting {
 				c.StartHashing()
+			} else {
+				c.SetState(pastState)
 			}
 
 			c.Println("Successfully reconnected to server")
