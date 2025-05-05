@@ -47,9 +47,9 @@ convert_to_writes() {
     echo $writes
 }
 
-read -p "Enter how you want to name your mapper (name of the device in /dev/mapper): " target_name
-read -p "Enter replicated device (e.g., /dev/loop0, /dev/sdb2): " device
-read -p "Enter character device name (any, can be similar to mapper name): " chardev_name
+read -p "Enter how you want to name your mapper (name of the device in /dev/mapper - NOT A PATH): " target_name
+read -p "Enter path replicated device (e.g., /dev/loop0, /dev/sdb2): " device
+read -p "Enter character device name (any, can be similar to mapper name - NOT A PATH): " chardev_name
 
 # Ask for buffer size with unit and convert to writes
 read -p "Enter buffer size (e.g., 4104, 8K, 1M): " buffer_size_input
@@ -66,5 +66,5 @@ echo "0 $(blockdev --getsz $device) bdr $device $chardev_name $buffer_size_in_wr
     sudo dmsetup create "$target_name" || \
     error_exit "Can't create target '$target_name' on '$device' with character device '$chardev_name' and buffer size $buffer_size_in_writes. Probably name collision or bdr module isn't loaded."
 
-echo "Device Mapper target '$target_name' on '$device' with character device '/dev/$chardev_name' and buffer size $buffer_size_in_writes created successfully. Your device is available /dev/mapper/$target_name"
+echo "Device Mapper target '$target_name' on '$device' with character device '/dev/$chardev_name' and buffer size $buffer_size_input created successfully. Your device is available /dev/mapper/$target_name"
 dmsetup ls
